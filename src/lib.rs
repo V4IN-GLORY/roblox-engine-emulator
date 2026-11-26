@@ -1177,6 +1177,14 @@ impl Engine {
         state.output.missing(class, member, now, at);
     }
 
+    /// [`Engine::missing`] for a method that returned a default of its reflected type: an Output line of kind `stubbed`
+    /// ([`output::Output::stubbed`]). `key`: `<Class.Member>`.
+    pub fn stubbed(&self, lua: &mlua::Lua, key: &str) {
+        let mut state = self.state.borrow_mut();
+        let now = state.sched.now;
+        state.output.stubbed(key, now, || crate::lua::script_position(lua));
+    }
+
     pub fn class_id(&self, name: &str) -> Option<ClassId> {
         self.reflection.class_id(name)
     }

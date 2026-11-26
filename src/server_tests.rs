@@ -494,8 +494,8 @@ fn messages_reach_subscribers_and_remotes_reach_no_client() {
     }
 }
 
-/// A client keeps what it had: its local player and no data stores (their members are not emulated there, Output
-/// `missing`).
+/// A client keeps what it had: its local player and no data stores (their members are not emulated there: Output `stubbed`,
+/// GetDataStore answering a DataStore of its reflected type; Roblox's client-side error is not emulated).
 #[test]
 fn a_client_keeps_its_stubs() {
     let lines = run(
@@ -506,7 +506,7 @@ fn a_client_keeps_its_stubs() {
         "#,
         0.1,
     );
-    assert!(has(&lines, "print: client true false Player 0"), "{lines:?}");
+    assert!(has(&lines, "print: client true false Player 1"), "{lines:?}");
 }
 
 /// EncodingService answers buffers on a playing client as on a server, with the client's errors (measured in a 0.747

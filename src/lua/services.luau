@@ -122,13 +122,13 @@ Method("Players", "GetNameFromUserIdAsync", function(_, UserId)
 	end
 	Missing("Players", "GetNameFromUserIdAsync") return `User{UserId}` -- (an account's name is the web's: a stand-in)
 end)
-local function HumanoidDescription(Name) -- (an avatar is the web's: a default description stands in, and says so)
-	return function() Missing("Players", Name) return Create("HumanoidDescription") end
-end
-Method("Players", "GetHumanoidDescriptionFromUserId", HumanoidDescription("GetHumanoidDescriptionFromUserId"))
-Method("Players", "GetHumanoidDescriptionFromUserIdAsync", HumanoidDescription("GetHumanoidDescriptionFromUserIdAsync"))
-Method("Players", "GetHumanoidDescriptionFromOutfitId", HumanoidDescription("GetHumanoidDescriptionFromOutfitId"))
-Method("Players", "GetHumanoidDescriptionFromOutfitIdAsync", HumanoidDescription("GetHumanoidDescriptionFromOutfitIdAsync"))
+-- An avatar is the web's: these have no behaviour, so the unemulated stand-in answers each with a fresh HumanoidDescription,
+-- its reflected return type (a frame later for the Async ones), and reports itself (lua/fallback.rs):
+--   Players:GetHumanoidDescriptionFromUserId
+--   Players:GetHumanoidDescriptionFromUserIdAsync
+--   Players:GetHumanoidDescriptionFromOutfitId
+--   Players:GetHumanoidDescriptionFromOutfitIdAsync
+-- (seven lines, as the stand-ins here had: the lines below stay where rur's recorded traces name them)
 Method("Players", "GetFriendsAsync", function()
 	return EmptyPages()
 end)

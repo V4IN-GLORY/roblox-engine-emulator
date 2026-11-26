@@ -141,7 +141,7 @@ pub enum ScriptType {
 }
 
 impl ScriptType {
-    fn parse(name: &str) -> Self {
+    pub(crate) fn parse(name: &str) -> Self {
         match name {
             "number" => Self::Number,
             "string" => Self::String,

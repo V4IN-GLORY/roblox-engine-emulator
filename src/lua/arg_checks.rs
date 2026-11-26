@@ -189,8 +189,8 @@ pub unsafe fn check(state: *mut ffi::lua_State, plan: &ArgPlan, self_index: c_in
     }
 }
 
-/// What a call the plan refuses does before it raises: a stand-in's records its unemulated member (Output `missing`), as its
-/// body would have.
+/// What a call the plan refuses does before it raises: a stand-in's records its member (Output `stubbed`), as its body would
+/// have, so the run fails on the argument error instead of being reported as unemulated.
 ///
 /// # Safety
 /// `state` must be the running thread, inside the C function making the call.
@@ -198,7 +198,7 @@ pub unsafe fn refused(state: *mut ffi::lua_State, plan: &ArgPlan) {
     let Some((class, member)) = &plan.stand_in else { return };
     let lua = unsafe { Lua::get_or_init_from_ptr(state) };
     if let Ok(Some(engine)) = lua.try_app_data_ref::<Rc<Engine>>() {
-        engine.missing(Some(lua), class, member);
+        engine.stubbed(lua, &format!("{class}.{member}"));
     }
 }
 

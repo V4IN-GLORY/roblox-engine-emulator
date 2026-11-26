@@ -3,9 +3,10 @@
   python validator/validate.py path/to/Code.luau [--context server|client] [--ree target/release/ree.exe]
 
 The file is the body of a script: it's wrapped as `return function(Context) ... end` and run for 1 second of game time.
-Output: {"ok": bool, "errors": [...], "unemulated": [...]}. ok is false when the code raised anywhere (spawned threads and
-event handlers included). unemulated lists the APIs ree reached but doesn't emulate yet: a run that touched one can't be
-trusted, so ok is null there.
+Output: {"ok": bool, "errors": [...], "unemulated": [...], "stubbed": [...]}. ok is false when the code raised anywhere
+(spawned threads and event handlers included). unemulated lists the APIs ree reached but doesn't emulate yet: a run that
+touched one can't be trusted, so ok is null there. stubbed lists the methods that answered a default of the type Roblox
+returns (tier 3): the run still counts.
 """
 import argparse
 import json
@@ -30,12 +31,13 @@ def validate(code: str, context: str, ree: str) -> dict:
 	try:
 		summary = json.loads(stdout[stdout.index("{"):])
 	except ValueError:
-		return {"ok": None, "errors": [f"ree didn't run: {(result.stderr or stdout)[-400:]}"], "unemulated": []}
+		return {"ok": None, "errors": [f"ree didn't run: {(result.stderr or stdout)[-400:]}"], "unemulated": [], "stubbed": []}
 	output = summary.get("output") or []
 	errors = [line["message"] for line in output if line.get("kind") == "error"]
 	unemulated = [line["message"].split(" is not emulated")[0] for line in output if line.get("kind") == "missing"]
+	stubbed = [line["message"].split(" is not emulated")[0] for line in output if line.get("kind") == "stubbed"]
 	ok = None if unemulated else not errors
-	return {"ok": ok, "errors": errors, "unemulated": unemulated}
+	return {"ok": ok, "errors": errors, "unemulated": unemulated, "stubbed": stubbed}
 
 
 if __name__ == "__main__":

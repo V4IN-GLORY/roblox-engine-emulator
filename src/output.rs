@@ -168,21 +168,31 @@ impl Output {
     /// Hosts call [`crate::Engine::missing`], which finds the script's position. The line is not one a script logged:
     /// LogService (MessageOut, GetLogHistory) never gets it.
     pub fn missing(&mut self, class: &str, member: &str, time: f64, at: impl FnOnce() -> Option<String>) {
-        let key = format!("{class}.{member}");
-        if let Some(&index) = self.missing_index.get(&key) {
+        self.unemulated_use(MISSING, &format!("{class}.{member}"), time, at);
+    }
+
+    /// [`Output::missing`] for a method that answered with a value of its reflected return type (lua/fallback.rs): its line's
+    /// kind is `stubbed`. `key` is `<Class.Member>`, made once by the caller, so a use after the first allocates nothing.
+    pub fn stubbed(&mut self, key: &str, time: f64, at: impl FnOnce() -> Option<String>) {
+        self.unemulated_use(STUBBED, key, time, at);
+    }
+
+    fn unemulated_use(&mut self, kind: &'static str, key: &str, time: f64, at: impl FnOnce() -> Option<String>) {
+        if let Some(&index) = self.missing_index.get(key) {
             self.missing[index].1 += 1;
             return;
         }
         if self.verbose {
-            diagnostic(&format!("[stub] {key} is not emulated; returned nil"));
+            let returned = if kind == STUBBED { "a default of its type" } else { "nil" };
+            diagnostic(&format!("[stub] {key} is not emulated; returned {returned}"));
         }
         let at = at();
-        self.missing_index.insert(key.clone(), self.missing.len());
+        self.missing_index.insert(key.to_string(), self.missing.len());
         self.missing_first.push((at.clone(), time));
         let message = format!("{key} is not emulated");
-        self.missing.push((key, 1));
+        self.missing.push((key.to_string(), 1));
         // (the verbose line above stands for it: hosts' recorded verbose output keeps that one)
-        self.deliver(Entry { kind: MISSING, message, time, trace: at, side: self.side });
+        self.deliver(Entry { kind, message, time, trace: at, side: self.side });
     }
 
     /// The unemulated members used, as `ree run` and `ree record` summaries list them ([`unemulated`]).
@@ -193,6 +203,8 @@ impl Output {
 
 /// The kind of an [`Output::missing`] line
 pub const MISSING: &str = "missing";
+/// The kind of an [`Output::stubbed`] line
+pub const STUBBED: &str = "stubbed";
 
 /// An unemulated member a run used: how many times, and where and when a script first did ([`Output::missing`])
 #[derive(Clone, Debug, PartialEq)]

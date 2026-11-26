@@ -1,6 +1,6 @@
 //! Members the engine does not emulate report themselves (docs/engine.md "Parity first"): the first use of each writes an Output
-//! line of kind `missing` with the script's position, and `ree run` / `ree record` summaries list them all (`unemulated`:
-//! member, count, first position). Each test runs a harness as `ree run` does (record::run).
+//! line of kind `missing` (`stubbed` for a method nothing implements) with the script's position, and `ree run` / `ree record`
+//! summaries list them all (`unemulated`: member, count, first position). Each test runs a harness as `ree run` does (record::run).
 
 use std::path::PathBuf;
 
@@ -40,26 +40,43 @@ fn run_harness(name: &str, harness: &str, extra: &[&str]) -> Json {
     summary
 }
 
-/// The summary's output lines of kind `missing`, as `message @ trace`
+/// The summary's output lines of kind `kind`, as `message @ trace`
 #[inline(never)]
-fn missing_lines(summary: &Json) -> Vec<String> {
+fn lines_of(summary: &Json, kind: &str) -> Vec<String> {
     summary["output"]
         .as_array()
         .unwrap()
         .iter()
-        .filter(|line| line["kind"] == "missing")
+        .filter(|line| line["kind"] == kind)
         .map(|line| format!("{} @ {}", line["message"].as_str().unwrap(), line["trace"].as_str().unwrap_or("-")))
         .collect()
+}
+
+/// The summary's output lines of kind `missing`, as `message @ trace`
+fn missing_lines(summary: &Json) -> Vec<String> {
+    lines_of(summary, "missing")
+}
+
+/// The summary's output lines of kind `stubbed` (a method nothing implements, answering a default of its return type), as
+/// `message @ trace`
+fn stubbed_lines(summary: &Json) -> Vec<String> {
+    lines_of(summary, "stubbed")
 }
 
 /// The summary's other output lines, as `kind: message`
 #[inline(never)]
 fn other_lines(summary: &Json) -> Vec<String> {
-    summary["output"].as_array().unwrap().iter().filter(|line| line["kind"] != "missing").map(|line| format!("{}: {}", line["kind"].as_str().unwrap(), line["message"].as_str().unwrap())).collect()
+    summary["output"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|line| line["kind"] != "missing" && line["kind"] != "stubbed")
+        .map(|line| format!("{}: {}", line["kind"].as_str().unwrap(), line["message"].as_str().unwrap()))
+        .collect()
 }
 
-/// A reflected method nothing implements (Humanoid:TakeDamage) still answers nil and changes nothing, and now says so: its
-/// first call writes a `missing` line naming the script's line, and the summary lists it with every call counted and the
+/// A reflected method nothing implements (Humanoid:TakeDamage, a Void method) answers nothing and changes nothing, and says so:
+/// its first call writes a `stubbed` line naming the script's line, and the summary lists it with every call counted and the
 /// first call's position
 #[test]
 fn an_unimplemented_method_reports_its_first_call_and_counts_the_rest() {
@@ -77,7 +94,7 @@ end
     );
     assert_eq!(summary["status"], "ok", "{summary}");
     assert_eq!(summary["errors"], 0);
-    assert_eq!(missing_lines(&summary), ["Humanoid.TakeDamage is not emulated @ ReplicatedStorage.RURFixtures.TakeDamage:3"]);
+    assert_eq!(stubbed_lines(&summary), ["Humanoid.TakeDamage is not emulated @ ReplicatedStorage.RURFixtures.TakeDamage:3"]);
     assert_eq!(other_lines(&summary), ["print: 0 100"]);
     assert_eq!(summary["unemulated"], json!([{ "member": "Humanoid.TakeDamage", "count": 3, "first": "ReplicatedStorage.RURFixtures.TakeDamage:3" }]));
 }
@@ -205,7 +222,7 @@ end
     );
 }
 
-/// A `missing` line is the engine's, not a script's: LogService.MessageOut never gets it and GetLogHistory does not hold it,
+/// A `missing` or `stubbed` line is the engine's, not a script's: LogService.MessageOut never gets it and GetLogHistory does not hold it,
 /// and it counts as no error
 #[test]
 fn a_missing_line_is_not_logged_to_scripts() {
@@ -228,7 +245,7 @@ end
     );
     assert_eq!(other_lines(&summary), ["print: 0 0"], "{summary}");
     assert_eq!(summary["errors"], 0);
-    assert_eq!(missing_lines(&summary).len(), 1);
+    assert_eq!(stubbed_lines(&summary).len(), 1);
 }
 
 /// `ree record` writes the same list into summary.json (and its status line counts them)
@@ -299,8 +316,14 @@ fn a_loopback_run_lists_both_sides() {
         &[],
     );
     assert_eq!(summary["status"], "ok", "{summary}");
-    let sides: Vec<String> = summary["output"].as_array().unwrap().iter().filter(|line| line["kind"] == "missing").map(|line| format!("{} {}", line["side"].as_str().unwrap(), line["message"].as_str().unwrap())).collect();
-    assert_eq!(sides, ["server Humanoid.TakeDamage is not emulated", "client Humanoid.TakeDamage is not emulated", "client StarterGui.SetCore is not emulated"]);
+    let sides: Vec<String> = summary["output"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|line| line["kind"] == "missing" || line["kind"] == "stubbed")
+        .map(|line| format!("{} {} {}", line["side"].as_str().unwrap(), line["kind"].as_str().unwrap(), line["message"].as_str().unwrap()))
+        .collect();
+    assert_eq!(sides, ["server stubbed Humanoid.TakeDamage is not emulated", "client stubbed Humanoid.TakeDamage is not emulated", "client missing StarterGui.SetCore is not emulated"]);
     let list = summary["unemulated"].as_array().unwrap();
     assert_eq!(list[0]["member"], "Humanoid.TakeDamage");
     assert_eq!(list[0]["count"], 3);

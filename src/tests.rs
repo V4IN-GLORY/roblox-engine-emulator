@@ -12512,19 +12512,20 @@ fn workspace_and_world_root_engine_only_methods_raise_a_game_scripts_capability_
         let mut want = Vec::new();
         for &(name, capability, root) in METHODS {
             if mode == "edit" && capability == "Plugin" {
-                want.push(format!("missing: Workspace.{name} is not emulated"));
-                want.push(format!("print: {name} answers nil"));
+                // (named after the class that declares it; a boolean method answers false: lua/fallback.rs)
+                want.push(format!("stubbed: {}.{name} is not emulated", if root { "WorldRoot" } else { "Workspace" }));
+                want.push(format!("print: {name} answers {}", if name == "ApplyRecommendedStreamingSettings" { "false" } else { "nil" }));
                 continue;
             }
             let both = if root { " true true" } else { "" };
             want.push(format!("print: {name} function false string The current thread cannot call '{name}' (lacking capability {capability}) true{both}"));
         }
         for name in ["BreakJoints", "MakeJoints"] {
-            want.push(format!("missing: Model.{name} is not emulated"));
+            want.push(format!("stubbed: Model.{name} is not emulated"));
             want.push(format!("print: Model {name} function true true"));
         }
         for name in ["breakJoints", "makeJoints"] {
-            want.push(format!("missing: Workspace.{name} is not emulated"));
+            want.push(format!("stubbed: Model.{name} is not emulated"));
             want.push(format!("print: workspace {name} true"));
         }
         want.push("print: Selection remove true".into());
@@ -12557,7 +12558,7 @@ fn selection_capability_methods_raise_for_game_scripts_and_keep_instance_remove(
         for _, Name in { "Get", "Set", "Add", "Remove", "AddFocusCallback", "ClearTerrainSelectionHack", "SetTerrainSelectionHack" } do
             local Ok, Message = pcall(Selection[Name], Selection)
             if Ok then
-                print(Name, "answers", Message)
+                print(Name, "answers", typeof(Message))
                 continue
             end
             local NoSelf = select(2, pcall(Selection[Name]))
@@ -12575,8 +12576,8 @@ fn selection_capability_methods_raise_for_game_scripts_and_keep_instance_remove(
         let mut want = Vec::new();
         for &(name, capability) in METHODS {
             if mode == "edit" && capability == "Plugin" {
-                want.push(format!("missing: Selection.{name} is not emulated"));
-                want.push(format!("print: {name} answers nil"));
+                want.push(format!("stubbed: Selection.{name} is not emulated"));
+                want.push(format!("print: {name} answers {}", if name == "Get" { "table" } else { "nil" }));
                 continue;
             }
             want.push(format!("print: {name} function false The current thread cannot call '{name}' (lacking capability {capability}) true"));
@@ -12647,8 +12648,8 @@ fn user_input_service_get_platform_raises_roblox_script_capability_error() {
     }
 }
 
-/// What Studio 0.747's dump adds and ree does not emulate reports itself (an Output line of kind `missing` at its first use)
-/// and answers nil; what the dump drops is no member any more.
+/// What Studio 0.747's dump adds and ree does not emulate reports itself (an Output line of kind `stubbed` at its first use)
+/// and answers a default of its return type (lua/fallback.rs); what the dump drops is no member any more.
 #[test]
 fn methods_new_in_0_747_report_themselves_as_not_emulated() {
     let (lua, engine) = start();
@@ -12656,11 +12657,11 @@ fn methods_new_in_0_747_report_themselves_as_not_emulated() {
         &lua,
         &engine,
         r#"
-        print(game:GetService("CollectionService"):GetCollections(Instance.new("Part")))
-        print(game:GetService("RunService"):BindToSimulationParallel(function() end, Enum.StepFrequency.Hz60, 1))
+        print(typeof(game:GetService("CollectionService"):GetCollections(Instance.new("Part"))))
+        print(typeof(game:GetService("RunService"):BindToSimulationParallel(function() end, Enum.StepFrequency.Hz60, 1)))
         local Emitter = Instance.new("ParticleEmitter2D")
         print(Emitter:Emit(3), Emitter:Clear())
-        print(Instance.new("Sound"):GetPlaybackState(), Instance.new("TextDocument"):ReadAsync())
+        print(Instance.new("Sound"):GetPlaybackState() == "", Instance.new("TextDocument"):ReadAsync() == "")
         print(game:GetService("FeatureMatchingService").ClassName, Instance.new("UIBlur"):IsA("UIComponent"), Instance.new("AvatarRules").ClassName)
         print(pcall(function() return Instance.new("AnimationRigData"):LoadFromHumanoid() end))
         "#,
@@ -12668,16 +12669,16 @@ fn methods_new_in_0_747_report_themselves_as_not_emulated() {
     assert_eq!(
         output,
         [
-            "missing: CollectionService.GetCollections is not emulated",
-            "print: ",
-            "missing: RunService.BindToSimulationParallel is not emulated",
-            "print: ",
-            "missing: ParticleEmitter2D.Emit is not emulated",
-            "missing: ParticleEmitter2D.Clear is not emulated",
+            "stubbed: CollectionService.GetCollections is not emulated",
+            "print: table",
+            "stubbed: RunService.BindToSimulationParallel is not emulated",
+            "print: RBXScriptConnection",
+            "stubbed: ParticleEmitter2D.Emit is not emulated",
+            "stubbed: ParticleEmitter2D.Clear is not emulated",
             "print: nil",
-            "missing: Sound.GetPlaybackState is not emulated",
-            "missing: TextDocument.ReadAsync is not emulated",
-            "print: nil",
+            "stubbed: Sound.GetPlaybackState is not emulated",
+            "stubbed: TextDocument.ReadAsync is not emulated",
+            "print: true true",
             "print: FeatureMatchingService true AvatarRules",
             "print: false LoadFromHumanoid is not a valid member of AnimationRigData \"AnimationRigData\"",
         ]
@@ -15197,4 +15198,68 @@ fn property_access_write_errors_and_datatype_defaults() {
         Fails("Unable to assign property Capabilities. SecurityCapabilities expected, got table", function() (Part :: any).Capabilities = {} end)
         "#,
     );
+}
+
+/// A reflected method no behaviour implements answers a value of its reflected return type (lua/fallback.rs, docs/engine.md
+/// "Unemulated methods"; what Roblox Studio 0.748.0.7481526 returned for valid calls: validator/probe/expected, the `cv` lines):
+/// a fresh instance of the class, the datatype's zero, the enum's first item, nil for a Variant or an abstract class, a fresh
+/// table, a connection; an `Async` one answers a frame later. Each writes one Output line of kind `stubbed`, named after the
+/// class that declares it whichever subclass called it.
+#[test]
+fn unemulated_methods_answer_a_default_of_their_return_type() {
+    let (lua, engine) = start();
+    let output = run(
+        &lua,
+        &engine,
+        r##"
+        local Players = game:GetService("Players")
+        local Description = Players:GetHumanoidDescriptionFromUserId(1)
+        assert(typeof(Description) == "Instance" and Description.ClassName == "HumanoidDescription" and Description.Parent == nil)
+        assert(Players:GetHumanoidDescriptionFromUserId(1) ~= Description)
+        Description.HeadColor = Color3.new(1, 0, 0)
+
+        local Part, Wedge = Instance.new("Part"), Instance.new("CornerWedgePart")
+        assert(Part:GetVelocityAtPosition(Vector3.one) == Vector3.zero)
+        assert(Part:GetRenderCFrame() == CFrame.identity and Wedge:GetRenderCFrame() == CFrame.identity)
+        assert(select("#", Wedge:GetRootPart()) == 1 and Wedge:GetRootPart() == nil)
+        assert(select("#", Part:BreakJoints()) == 0)
+        assert(game:GetService("VRService"):GetTouchpadMode(Enum.VRTouchpad.Left) == Enum.VRTouchpadMode:GetEnumItems()[1])
+        assert(select("#", Instance.new("StyleRule"):GetProperty("Size")) == 1)
+
+        local Connection = game:GetService("RunService"):BindToSimulation(function() end)
+        assert(typeof(Connection) == "RBXScriptConnection" and Connection.Connected)
+        Connection:Disconnect()
+
+        local Answered = nil
+        task.spawn(function()
+            Answered = game:GetService("AssetService"):GetBundleDetailsAsync(1)
+        end)
+        assert(Answered == nil)
+        task.wait()
+        assert(type(Answered) == "table" and next(Answered) == nil)
+        Answered.Items = {}
+        assert(next(game:GetService("AssetService"):GetBundleDetailsAsync(1)) == nil)
+        print("done")
+        "##,
+    );
+    let stubbed: Vec<&String> = output.iter().filter(|line| line.starts_with("stubbed")).collect();
+    assert_eq!(
+        stubbed,
+        [
+            "stubbed: Players.GetHumanoidDescriptionFromUserId is not emulated",
+            "stubbed: BasePart.GetVelocityAtPosition is not emulated",
+            "stubbed: BasePart.GetRenderCFrame is not emulated",
+            "stubbed: BasePart.GetRootPart is not emulated",
+            "stubbed: BasePart.BreakJoints is not emulated",
+            "stubbed: VRService.GetTouchpadMode is not emulated",
+            "stubbed: StyleRule.GetProperty is not emulated",
+            "stubbed: RunService.BindToSimulation is not emulated",
+            "stubbed: AssetService.GetBundleDetailsAsync is not emulated",
+        ],
+        "{output:?}"
+    );
+    assert!(output.iter().all(|line| !line.starts_with("error") && !line.starts_with("missing")), "{output:?}");
+    assert!(output.contains(&"print: done".to_string()), "{output:?}");
+    let render = engine.state.borrow().output.unemulated().into_iter().find(|entry| entry.member == "BasePart.GetRenderCFrame").unwrap();
+    assert_eq!(render.count, 2);
 }

@@ -205,22 +205,25 @@ fn lua_method(lua: &Lua, engine: &Rc<Engine>, owner: ClassId, name: NameId, func
     Ok(wrapped)
 }
 
-/// A reflected method no behaviour implements: checks its arguments (arg_checks), records the call and returns nil.
+/// A reflected method no behaviour implements: checks its arguments (arg_checks), records the call (Output `stubbed`, under the
+/// class that declares it, whichever subclass's instance called it) and answers a value of its reflected return type
+/// (lua/fallback.rs). One function per declared method.
 pub(crate) fn unimplemented_function(lua: &Lua, engine: &Rc<Engine>, class: ClassId, name: NameId) -> LuaResult<LuaValue> {
-    if let Some(existing) = engine.lua.borrow().unimplemented.get(&(class, name)) {
+    let declaring = engine.reflection.declaring_class(class, name);
+    if let Some(existing) = engine.lua.borrow().unimplemented.get(&(declaring, name)) {
         return Ok(LuaValue::Function(existing.clone()));
     }
     let e = engine.clone();
-    let class_label = engine.reflection.class(class).name.to_string();
     let member = engine.reflection.name(name).to_string();
-    let label = member.clone();
-    let body = super::create_boxed_void(lua, Box::new(move |lua| {
-        e.missing(Some(lua), &class_label, &member);
-        Ok(())
+    let key = format!("{}.{member}", engine.reflection.class(declaring).name);
+    let fallback = super::fallback::Fallback::new(lua, engine, declaring, name)?;
+    let body = super::create_boxed_fn(lua, Box::new(move |lua, _| {
+        e.stubbed(lua, &key);
+        fallback.answer(lua, &e)
     }))?;
-    let checks = super::arg_checks::stand_in_plan(engine, class, name);
-    let function = super::cfunction::over_rust_checked(lua, &label, super::cfunction::Kind::Library, body, checks)?;
-    engine.lua.borrow_mut().unimplemented.insert((class, name), function.clone());
+    let checks = super::arg_checks::stand_in_plan(engine, declaring, name);
+    let function = super::cfunction::over_rust_checked(lua, &member, super::cfunction::Kind::Library, body, checks)?;
+    engine.lua.borrow_mut().unimplemented.insert((declaring, name), function.clone());
     Ok(LuaValue::Function(function))
 }
 

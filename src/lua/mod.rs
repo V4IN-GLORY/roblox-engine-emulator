@@ -14,6 +14,7 @@ pub mod builtins;
 pub mod cfunction;
 pub mod convert;
 pub mod curve_keys;
+mod fallback;
 pub mod float_mode;
 pub mod globals;
 pub mod holders;
@@ -182,7 +183,8 @@ pub struct LuaRefs {
     pub methods: FxHashMap<(ClassId, NameId), LuaFunction>,
     /// Behaviour methods as namecall runs them (protocol results, no Luau wrapper)
     pub call_methods: FxHashMap<(ClassId, NameId), LuaFunction>,
-    /// Stand-ins for reflected methods without a behaviour (report + return nil)
+    /// Stand-ins for reflected methods without a behaviour (report + a default of the return type: fallback.rs), by the
+    /// (class, name) that declares them
     pub unimplemented: FxHashMap<(ClassId, NameId), LuaFunction>,
     /// Behaviour methods in the engine's Luau as scripts call them, one C function each (instance.rs `lua_method`), by the
     /// (class, name) that defines them, with the Luau function each stands for
