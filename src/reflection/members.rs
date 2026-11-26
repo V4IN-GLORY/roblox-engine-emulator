@@ -918,6 +918,14 @@ pub(super) enum ParsedDefault {
     Dom(Variant),
     EnumItem(String, String),
     Font(String, String, String),
+    TweenInfo {
+        time: f64,
+        delay_time: f64,
+        repeat_count: f64,
+        reverses: bool,
+        easing_direction: String,
+        easing_style: String,
+    },
     None,
 }
 
@@ -1833,6 +1841,12 @@ enum DefaultTag {
     ColorSequence,
     Font,
     Content,
+    Faces,
+    Axes,
+    PhysicalProperties,
+    Ray,
+    SecurityCapabilities,
+    TweenInfo,
     Other,
 }
 
@@ -1865,6 +1879,12 @@ impl<'de> Deserialize<'de> for OptDefaultTag {
                     "ColorSequence" => DefaultTag::ColorSequence,
                     "Font" => DefaultTag::Font,
                     "Content" => DefaultTag::Content,
+                    "Faces" => DefaultTag::Faces,
+                    "Axes" => DefaultTag::Axes,
+                    "PhysicalProperties" => DefaultTag::PhysicalProperties,
+                    "Ray" => DefaultTag::Ray,
+                    "SecurityCapabilities" => DefaultTag::SecurityCapabilities,
+                    "TweenInfo" => DefaultTag::TweenInfo,
                     _ => DefaultTag::Other,
                 }))
             }
@@ -1894,59 +1914,6 @@ impl<'de> Deserialize<'de> for OptDefaultTag {
             }
         }
         deserializer.deserialize_any(TagVisitor).map(OptDefaultTag)
-    }
-}
-
-#[derive(Clone, Copy)]
-enum SpecialNumTag {
-    Nan,
-    Inf,
-    Other,
-}
-
-struct OptSpecialNum(Option<SpecialNumTag>);
-
-impl<'de> Deserialize<'de> for OptSpecialNum {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<OptSpecialNum, D::Error> {
-        struct SVisitor;
-        impl<'de> Visitor<'de> for SVisitor {
-            type Value = Option<SpecialNumTag>;
-            fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
-                formatter.write_str("a JSON value")
-            }
-            fn visit_str<E: de::Error>(self, s: &str) -> Result<Option<SpecialNumTag>, E> {
-                Ok(Some(match s {
-                    "nan" => SpecialNumTag::Nan,
-                    "inf" => SpecialNumTag::Inf,
-                    _ => SpecialNumTag::Other,
-                }))
-            }
-            fn visit_bool<E: de::Error>(self, _: bool) -> Result<Option<SpecialNumTag>, E> {
-                Ok(None)
-            }
-            fn visit_i64<E: de::Error>(self, _: i64) -> Result<Option<SpecialNumTag>, E> {
-                Ok(None)
-            }
-            fn visit_u64<E: de::Error>(self, _: u64) -> Result<Option<SpecialNumTag>, E> {
-                Ok(None)
-            }
-            fn visit_f64<E: de::Error>(self, _: f64) -> Result<Option<SpecialNumTag>, E> {
-                Ok(None)
-            }
-            fn visit_unit<E: de::Error>(self) -> Result<Option<SpecialNumTag>, E> {
-                Ok(None)
-            }
-            fn visit_none<E: de::Error>(self) -> Result<Option<SpecialNumTag>, E> {
-                Ok(None)
-            }
-            fn visit_seq<A: SeqAccess<'de>>(self, seq: A) -> Result<Option<SpecialNumTag>, A::Error> {
-                skip_seq(seq).map(|()| None)
-            }
-            fn visit_map<A: MapAccess<'de>>(self, map: A) -> Result<Option<SpecialNumTag>, A::Error> {
-                skip_map(map).map(|()| None)
-            }
-        }
-        deserializer.deserialize_any(SVisitor).map(OptSpecialNum)
     }
 }
 
@@ -2044,14 +2011,14 @@ impl<'de> Deserialize<'de> for ParsedDefault {
                 let mut v: Option<DefaultV> = None;
                 let mut e: Option<String> = None;
                 let mut n: Option<String> = None;
-                let mut s: Option<SpecialNumTag> = None;
+                let mut s: Option<String> = None;
                 while let Some(key) = map.next_key::<DefaultKey>()? {
                     match key {
                         DefaultKey::Tag => tag = map.next_value::<OptDefaultTag>()?.0,
                         DefaultKey::V => v = Some(map.next_value()?),
                         DefaultKey::E => e = map.next_value::<OptText>()?.0,
                         DefaultKey::N => n = map.next_value::<OptText>()?.0,
-                        DefaultKey::S => s = map.next_value::<OptSpecialNum>()?.0,
+                        DefaultKey::S => s = map.next_value::<OptText>()?.0,
                         DefaultKey::Other => {
                             map.next_value::<IgnoredAny>()?;
                         }
@@ -2059,9 +2026,9 @@ impl<'de> Deserialize<'de> for ParsedDefault {
                 }
                 let Some(tag) = tag else { return Ok(ParsedDefault::None) };
                 Ok(match tag {
-                    DefaultTag::Number => ParsedDefault::Dom(Variant::Float64(match s {
-                        Some(SpecialNumTag::Nan) => f64::NAN,
-                        Some(SpecialNumTag::Inf) => f64::INFINITY,
+                    DefaultTag::Number => ParsedDefault::Dom(Variant::Float64(match s.as_deref() {
+                        Some("nan") => f64::NAN,
+                        Some("inf") => f64::INFINITY,
                         _ => f64::NEG_INFINITY,
                     })),
                     DefaultTag::EnumItem => match (e, n) {
@@ -2180,6 +2147,25 @@ impl<'de> Deserialize<'de> for ParsedDefault {
                     DefaultTag::Content => match v {
                         Some(DefaultV::Str(uri)) if !uri.is_empty() => ParsedDefault::Dom(Variant::Content(dom::Content::from_uri(uri))),
                         _ => ParsedDefault::Dom(Variant::Content(dom::Content::none())),
+                    },
+                    DefaultTag::Faces => ParsedDefault::Dom(Variant::Faces(crate::value::parse_faces(s.as_deref().unwrap_or("")))),
+                    DefaultTag::Axes => ParsedDefault::Dom(Variant::Axes(crate::value::parse_axes(s.as_deref().unwrap_or("")))),
+                    DefaultTag::PhysicalProperties => match crate::value::parse_physical_properties(s.as_deref().unwrap_or("")) {
+                        Some(props) => ParsedDefault::Dom(Variant::PhysicalProperties(dom::PhysicalProperties::Custom(props))),
+                        None => ParsedDefault::None,
+                    },
+                    DefaultTag::Ray => match crate::value::parse_ray(s.as_deref().unwrap_or("")) {
+                        Some(ray) => ParsedDefault::Dom(Variant::Ray(ray)),
+                        None => ParsedDefault::None,
+                    },
+                    DefaultTag::SecurityCapabilities => {
+                        ParsedDefault::Dom(Variant::SecurityCapabilities(dom::SecurityCapabilities::from_bits(0)))
+                    }
+                    DefaultTag::TweenInfo => match crate::value::parse_tween_info_parts(s.as_deref().unwrap_or("")) {
+                        Some((time, delay_time, repeat_count, reverses, easing_direction, easing_style)) => {
+                            ParsedDefault::TweenInfo { time, delay_time, repeat_count, reverses, easing_direction, easing_style }
+                        }
+                        None => ParsedDefault::None,
                     },
                     DefaultTag::Other => ParsedDefault::None,
                 })

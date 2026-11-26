@@ -119,6 +119,8 @@ enum Write {
     /// A [`Write::Plain`] property a client does more for than store, which is not emulated: a write that changes it reports
     /// that (lua/instance.rs unemulated_write)
     Watched(u32),
+    /// A read-only reflected property without a setter (property index): type check runs before the read-only error
+    ReadOnly(u32),
     Parent,
     Name,
     Slow,
@@ -247,7 +249,8 @@ fn compute_member(engine: &Engine, class: ClassId, key: NameId) -> Member {
                 match property {
                     Some(index) if !reflection.property(index).read_only && linstance::unemulated_write(engine, class, name) => Write::Watched(index),
                     Some(index) if !reflection.property(index).read_only => Write::Plain(index),
-                    _ => Write::Slow,
+                    Some(index) => Write::ReadOnly(index),
+                    None => Write::Slow,
                 }
             };
         }
@@ -643,7 +646,27 @@ pub fn install(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
         let Some(id) = instance_id(&this) else { return Err(LuaError::runtime("invalid Instance")) };
         match linstance::assign(lua, &e, id, &key, &value) {
             Ok(()) => Ok((LuaValue::Nil, 0)),
-            Err(Flow::Error(error)) => Ok((LuaValue::String(lua.create_string(&error.message)?), error.level as i64)),
+            Err(Flow::Error(mut error)) => {
+                // Deprecated lower-case property aliases (e.g. BasePart.brickColor) keep the written name in assignment errors
+                // (Roblox Studio 0.748.0.7481526, validator/probe/expected).
+                if let LuaValue::String(ref written) = key
+                    && let Ok(written_str) = written.to_str()
+                    && let Some(key_id) = e.reflection.name_id(&written_str)
+                {
+                    let class = e.state.borrow().dom.at(id).class;
+                    let canonical = e.member_name(class, key_id);
+                    if canonical != key_id {
+                        let canonical_str = e.reflection.name(canonical);
+                        let prefix = format!("Unable to assign property {canonical_str}");
+                        if let Some(rest) = error.message.strip_prefix(&prefix)
+                            && (rest.is_empty() || rest.starts_with('.'))
+                        {
+                            error.message = format!("Unable to assign property {written_str}{rest}");
+                        }
+                    }
+                }
+                Ok((LuaValue::String(lua.create_string(&error.message)?), error.level as i64))
+            }
             Err(Flow::Fail(error)) => Err(error),
             Err(Flow::Yield) => Err(LuaError::runtime("attempt to yield across metamethod/C-call boundary")),
             Err(Flow::Raised(value)) => Ok((LuaValue::String(lua.create_string(Flow::raised_text(&value))?), 0)),
@@ -1450,42 +1473,54 @@ unsafe fn newindex_fast(state: *mut ffi::lua_State) -> Out {
         match member.write {
             Write::Plain(property) | Write::Watched(property) => {
                 let info = engine.reflection.property(property);
-                let value = match (info.script_type, kind) {
+                let fast = match (info.script_type, kind) {
                     (ScriptType::Number, ffi::LUA_TNUMBER) => {
                         let number = ffi::lua_tonumberx(state, 3, std::ptr::null_mut());
-                        Value::Number(super::convert::number_for(engine, info, number))
+                        Some(Value::Number(super::convert::number_for(engine, info, number)))
                     }
-                    (ScriptType::Boolean, ffi::LUA_TBOOLEAN) => Value::Bool(ffi::lua_toboolean(state, 3) != 0),
-                    (ScriptType::Boolean, ffi::LUA_TNIL) => Value::Bool(false),
-                    (ScriptType::String, ffi::LUA_TSTRING) => Value::String(Str::new(arg_bytes(state, 3).unwrap_or_default())),
-                    (ScriptType::Instance, ffi::LUA_TNIL) => Value::Nil,
-                    (ScriptType::Instance, ffi::LUA_TUSERDATA) => match arg_instance(state, 3) {
-                        Some(target) => Value::Instance(target),
-                        None => return Out::Slow,
-                    },
+                    (ScriptType::Boolean, ffi::LUA_TBOOLEAN) => Some(Value::Bool(ffi::lua_toboolean(state, 3) != 0)),
+                    (ScriptType::Boolean, ffi::LUA_TNIL) => Some(Value::Bool(false)),
+                    (ScriptType::String, ffi::LUA_TSTRING) => Some(Value::String(Str::new(arg_bytes(state, 3).unwrap_or_default()))),
+                    (ScriptType::Instance, ffi::LUA_TNIL) => Some(Value::Nil),
+                    (ScriptType::Instance, ffi::LUA_TUSERDATA) => arg_instance(state, 3).map(Value::Instance),
                     (ScriptType::EnumItem, ffi::LUA_TUSERDATA) if info.enum_name.is_some() => {
                         ffi::lua_rawgeti_(state, REGISTRY, api.refs.enum_ids);
                         ffi::lua_pushvalue(state, 3);
                         let found = ffi::lua_rawget(state, -2) == ffi::LUA_TNUMBER;
                         let item = ffi::lua_tonumberx(state, -1, std::ptr::null_mut()) as u32;
                         ffi::lua_pop(state, 2);
-                        if !found || Some(engine.reflection.enum_item_info(item).enum_type) != info.enum_type {
-                            return Out::Slow;
-                        }
-                        Value::EnumItem(item)
+                        (found && Some(engine.reflection.enum_item_info(item).enum_type) == info.enum_type).then_some(Value::EnumItem(item))
                     }
-                    // Datatypes, strings for numbers / enums, ...: Coerce on the value as mlua
-                    // sees it (its errors are left to the fallback)
-                    _ => match bridged_coerce(state, api, engine, info, 3) {
-                        Some(value) => value,
-                        None => return Out::Slow,
-                    },
+                    _ => None,
+                };
+                let value = match fast {
+                    Some(value) => value,
+                    // Datatypes, strings for numbers / enums, and mismatched types: coerce via mlua, raising directly with the
+                    // written property name (preserving deprecated lower-case aliases).
+                    None => {
+                        let written = arg_bytes(state, 2).and_then(|b| std::str::from_utf8(b).ok()).unwrap_or_else(|| engine.reflection.name(info.name));
+                        match bridged_coerce(state, api, engine, info, written, 3) {
+                            Ok(value) => value,
+                            Err(Flow::Error(error)) => return Out::Raise(error.message, error.level),
+                            Err(_) => return Out::Slow,
+                        }
+                    }
                 };
                 let changed = linstance::script_set_property(engine, id, member.name, value);
                 if changed && matches!(member.write, Write::Watched(_)) {
                     linstance::report_unemulated_write(engine, id, member.name, || super::script_position_on(state));
                 }
                 Out::Ret(0)
+            }
+            Write::ReadOnly(property) => {
+                let info = engine.reflection.property(property);
+                let written = arg_bytes(state, 2).and_then(|b| std::str::from_utf8(b).ok()).unwrap_or_else(|| engine.reflection.name(info.name));
+                // Type check runs before the read-only check (Roblox Studio 0.748.0.7481526, validator/probe/expected).
+                match bridged_coerce(state, api, engine, info, written, 3) {
+                    Ok(_) => Out::Raise(format!("Unable to assign property {written}. Property is read only"), 0),
+                    Err(Flow::Error(error)) => Out::Raise(error.message, error.level),
+                    Err(_) => Out::Slow,
+                }
             }
             Write::Parent => {
                 // (a subtree entering the DataModel starts the scripts under Actors in it: the slow path runs them)
@@ -1519,24 +1554,26 @@ unsafe fn newindex_fast(state: *mut ffi::lua_State) -> Out {
     }
 }
 
-/// Coerce of the value at `index` (passed to Rust through the bridge table); `None` when it
-/// fails (the fallback raises the error).
+/// Coerce of the value at `index` (passed to Rust through the bridge table), keeping the script's written property name in errors.
 unsafe fn bridged_coerce(
     state: *mut ffi::lua_State,
     api: &Api,
     engine: &Engine,
     info: &crate::reflection::PropertyInfo,
+    written: &str,
     index: c_int,
-) -> Option<Value> {
+) -> Result<Value, Flow> {
     unsafe {
         ffi::lua_rawgeti_(state, REGISTRY, api.refs.bridge);
         ffi::lua_pushvalue(state, index);
         ffi::lua_rawseti_(state, -2, 1);
         ffi::lua_pop(state, 1);
     }
-    let lua = api.lua.try_upgrade()?;
-    let value: LuaValue = api.bridge.raw_get(1).ok()?;
-    let coerced = super::convert::coerce(&lua, engine, info, &value).ok();
+    let Some(lua) = api.lua.try_upgrade() else {
+        return Err(Flow::Fail(LuaError::runtime("Lua state unavailable")));
+    };
+    let value: LuaValue = api.bridge.raw_get(1).map_err(Flow::Fail)?;
+    let coerced = super::convert::coerce_as(&lua, engine, info, written, &value);
     let _ = api.bridge.raw_set(1, LuaValue::Nil);
     coerced
 }

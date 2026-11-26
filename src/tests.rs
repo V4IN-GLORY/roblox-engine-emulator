@@ -15075,3 +15075,85 @@ fn class_reach_hidden_services_default_instances_user_and_debugger_manager() {
     );
     assert!(edit_lines.contains(&"print: edit ok".to_string()), "{edit_lines:?}");
 }
+
+/// Property write validation rules and default datatype reads (Roblox Studio 0.748.0.7481526, validator/probe/expected):
+/// type checks run before the read-only check, errors preserve the written alias name and report the reflected expected type
+/// (ContentId, Rect2D, InstanceType, strict datatypes), and Faces / Axes / PhysicalProperties / Ray / TweenInfo /
+/// SecurityCapabilities defaults decode to their runtime datatypes rather than nil.
+#[test]
+fn property_access_write_errors_and_datatype_defaults() {
+    assert_script(
+        r#"
+        local function Fails(Expected, Fn)
+            local Ok, Err = pcall(Fn)
+            assert(not Ok, "expected error: " .. Expected)
+            local Clean = string.gsub(tostring(Err), "^[^\n]-:%d+: ", "")
+            assert(Clean == Expected, "expected [" .. Expected .. "], got [" .. Clean .. "]")
+        end
+
+        -- Type check runs before read-only check (plain and derived read-only properties)
+        local Ad = Instance.new("AdGui")
+        Fails("Unable to assign property Status. EnumItem, number, or string expected, got table", function() (Ad :: any).Status = {} end)
+        Fails("Unable to assign property Status. Property is read only", function() (Ad :: any).Status = Enum.AdUnitStatus.Inactive end)
+
+        local Part = Instance.new("Part")
+        Fails("Unable to assign property ClassName. string expected, got table", function() (Part :: any).ClassName = {} end)
+        Fails("Unable to assign property className. string expected, got table", function() (Part :: any).className = {} end)
+        Fails("Unable to assign property className. Property is read only", function() (Part :: any).className = "X" end)
+        Fails("Unable to assign property AssemblyCenterOfMass. Vector3 expected, got table", function() (Part :: any).AssemblyCenterOfMass = {} end)
+        Fails("Unable to assign property AssemblyCenterOfMass. Property is read only", function() (Part :: any).AssemblyCenterOfMass = Vector3.zero end)
+        Fails("Unable to assign property AssemblyRootPart. BasePart expected, got table", function() (Part :: any).AssemblyRootPart = {} end)
+        Fails("Unable to assign property TopbarInset. Rect2D expected, got table", function() (game:GetService("GuiService") :: any).TopbarInset = {} end)
+
+        local Clip = Instance.new("KeyframeSequence")
+        Fails("Unable to assign property Length. Property is read only", function() (Clip :: any).Length = {} end)
+
+        -- Reflected expected type names: ContentId, Rect2D, InstanceType
+        local Anim = Instance.new("Animation")
+        Fails("Unable to assign property AnimationId. ContentId expected, got table", function() (Anim :: any).AnimationId = {} end)
+        local Label = Instance.new("ImageLabel")
+        Fails("Unable to assign property SliceCenter. Rect2D expected, got table", function() (Label :: any).SliceCenter = {} end)
+        local Beam = Instance.new("Beam")
+        Fails("Unable to assign property Attachment0. Attachment expected, got table", function() (Beam :: any).Attachment0 = {} end)
+        Fails("Unable to assign property CurrentCamera. Camera expected, got table", function() (workspace :: any).CurrentCamera = {} end)
+        Fails("Unable to assign property NextSelectionDown. GuiObject expected, got table", function() (Label :: any).NextSelectionDown = {} end)
+
+        -- Deprecated alias names preserved in assignment errors (plain, derived, custom setter)
+        Fails("Unable to assign property brickColor. BrickColor expected, got table", function() (Part :: any).brickColor = {} end)
+        local Gyro = Instance.new("BodyGyro")
+        Fails("Unable to assign property maxTorque. Vector3 expected, got table", function() (Gyro :: any).maxTorque = {} end)
+        local LocTable = Instance.new("LocalizationTable")
+        Fails("Unable to assign property DevelopmentLanguage. string expected, got table", function() (LocTable :: any).DevelopmentLanguage = {} end)
+
+        -- Attachment World* setters report full type error
+        local Att = Instance.new("Attachment")
+        Fails("Unable to assign property WorldPosition. Vector3 expected, got table", function() (Att :: any).WorldPosition = {} end)
+        Fails("Unable to assign property WorldCFrame. CoordinateFrame expected, got table", function() (Att :: any).WorldCFrame = {} end)
+
+        -- Default datatype reads and strict writes
+        assert(typeof(Part.ResizeableFaces) == "Faces" and Part.ResizeableFaces.Top == true)
+        Fails("Unable to assign property ResizeableFaces. Faces expected, got table", function() (Part :: any).ResizeableFaces = {} end)
+        assert(typeof(Part.CurrentPhysicalProperties) == "PhysicalProperties" and Part.CustomPhysicalProperties == nil)
+        Fails("Unable to assign property CurrentPhysicalProperties. PhysicalProperties expected, got table", function() (Part :: any).CurrentPhysicalProperties = {} end)
+
+        local Arc = Instance.new("ArcHandles")
+        assert(typeof(Arc.Axes) == "Axes" and Arc.Axes.X == true)
+        Fails("Unable to assign property Axes. Axes expected, got table", function() (Arc :: any).Axes = {} end)
+
+        local H = Instance.new("Handles")
+        assert(typeof(H.Faces) == "Faces" and H.Faces.Front == true)
+        Fails("Unable to assign property Faces. Faces expected, got table", function() (H :: any).Faces = {} end)
+
+        local RV = Instance.new("RayValue")
+        assert(typeof(RV.Value) == "Ray")
+        Fails("Unable to assign property Value. Ray expected, got table", function() (RV :: any).Value = {} end)
+
+        local Tw = Instance.new("Tween")
+        assert(typeof(Tw.TweenInfo) == "TweenInfo")
+        Fails("Unable to assign property TweenInfo. TweenInfo expected, got table", function() (Tw :: any).TweenInfo = {} end)
+
+        assert(typeof(Part.Capabilities) == "SecurityCapabilities")
+        Fails("Unable to assign property Capabilities. SecurityCapabilities expected, got table", function() (Part :: any).Capabilities = {} end)
+        "#,
+    );
+}

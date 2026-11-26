@@ -80,6 +80,17 @@ pub struct FontValue {
     pub style: EnumItemId,
 }
 
+/// `TweenInfo` (types.rs LTweenInfo): time, easing style/direction, repeat count, reverses, delay time.
+#[derive(Clone, Debug, PartialEq)]
+pub struct TweenInfoValue {
+    pub time: f64,
+    pub easing_style: EnumItemId,
+    pub easing_direction: EnumItemId,
+    pub repeat_count: f64,
+    pub reverses: bool,
+    pub delay_time: f64,
+}
+
 /// `Content` (datatypes.luau ContentInfo).
 #[derive(Clone, Debug, PartialEq)]
 pub enum ContentValue {
@@ -133,6 +144,7 @@ pub enum Value {
     ColorSequence(Rc<dom::ColorSequence>),
     Font(Rc<FontValue>),
     Content(Rc<ContentValue>),
+    TweenInfo(Rc<TweenInfoValue>),
     /// Other rbx-dom datatypes (CFrame, BrickColor, Ray, Faces, ...), shown as Lune userdata
     Dom(Rc<Variant>),
     /// Any other script value (tables, functions, threads, other userdata); boxed, so a Value is 24
@@ -283,6 +295,7 @@ impl Value {
             (Value::ColorSequence(a), Value::ColorSequence(b)) => a == b,
             (Value::Font(a), Value::Font(b)) => a == b,
             (Value::Content(a), Value::Content(b)) => a == b,
+            (Value::TweenInfo(a), Value::TweenInfo(b)) => a == b,
             (Value::Dom(a), Value::Dom(b)) => a == b,
             (Value::Lua(a), Value::Lua(b)) => a == b,
             _ => false,
@@ -331,6 +344,89 @@ fn at(values: &[f64], index: usize) -> f64 {
 /// Lune truncates constructor offsets to i32 (`as` saturates; NaN is 0).
 fn int32(value: f64) -> i32 {
     value as i32
+}
+
+/// Parses Roblox's `tostring(Faces)` text (`"Right, Top, Back, Left, Bottom, Front"`) into `dom::Faces`.
+pub(crate) fn parse_faces(text: &str) -> dom::Faces {
+    let mut bits = 0u8;
+    for part in text.split(',') {
+        bits |= match part.trim() {
+            "Right" => dom::Faces::RIGHT.bits(),
+            "Top" => dom::Faces::TOP.bits(),
+            "Back" => dom::Faces::BACK.bits(),
+            "Left" => dom::Faces::LEFT.bits(),
+            "Bottom" => dom::Faces::BOTTOM.bits(),
+            "Front" => dom::Faces::FRONT.bits(),
+            _ => 0,
+        };
+    }
+    dom::Faces::from_bits(bits).unwrap_or_else(dom::Faces::empty)
+}
+
+/// Parses Roblox's `tostring(Axes)` text (`"X, Y, Z"`) into `dom::Axes`.
+pub(crate) fn parse_axes(text: &str) -> dom::Axes {
+    let mut bits = 0u8;
+    for part in text.split(',') {
+        bits |= match part.trim() {
+            "X" => dom::Axes::X.bits(),
+            "Y" => dom::Axes::Y.bits(),
+            "Z" => dom::Axes::Z.bits(),
+            _ => 0,
+        };
+    }
+    dom::Axes::from_bits(bits).unwrap_or_else(dom::Axes::empty)
+}
+
+/// Parses Roblox's `tostring(PhysicalProperties)` text (`"0.7, 0.3, 0.5, 1, 1, 0.3"`).
+pub(crate) fn parse_physical_properties(text: &str) -> Option<dom::CustomPhysicalProperties> {
+    let mut parts = text.split(',').map(|s| s.trim().parse::<f32>().ok());
+    let density = parts.next()??;
+    let friction = parts.next()??;
+    let elasticity = parts.next()??;
+    let friction_weight = parts.next()??;
+    let elasticity_weight = parts.next()??;
+    let acoustic_absorption = parts.next().flatten().unwrap_or(1.0);
+    Some(dom::CustomPhysicalProperties::new(density, friction, elasticity, friction_weight, elasticity_weight, acoustic_absorption))
+}
+
+/// Parses Roblox's `tostring(Ray)` text (`"{0, 0, 0}, {0, 0, 0}"`).
+pub(crate) fn parse_ray(text: &str) -> Option<dom::Ray> {
+    let mut nums = text.split(|c: char| c == ',' || c == '{' || c == '}').filter_map(|s| {
+        let s = s.trim();
+        if s.is_empty() { None } else { s.parse::<f32>().ok() }
+    });
+    let ox = nums.next()?;
+    let oy = nums.next()?;
+    let oz = nums.next()?;
+    let dx = nums.next()?;
+    let dy = nums.next()?;
+    let dz = nums.next()?;
+    Some(dom::Ray::new(dom::Vector3::new(ox, oy, oz), dom::Vector3::new(dx, dy, dz)))
+}
+
+/// Parses Roblox's `tostring(TweenInfo)` text (`"Time:1 DelayTime:0 RepeatCount:0 Reverses:False EasingDirection:Out EasingStyle:Quad"`).
+pub(crate) fn parse_tween_info_parts(text: &str) -> Option<(f64, f64, f64, bool, String, String)> {
+    let mut time = 1.0;
+    let mut delay_time = 0.0;
+    let mut repeat_count = 0.0;
+    let mut reverses = false;
+    let mut easing_direction = String::from("Out");
+    let mut easing_style = String::from("Quad");
+    let mut any = false;
+    for token in text.split_whitespace() {
+        let Some((k, v)) = token.split_once(':') else { continue };
+        any = true;
+        match k {
+            "Time" => time = v.parse().unwrap_or(1.0),
+            "DelayTime" => delay_time = v.parse().unwrap_or(0.0),
+            "RepeatCount" => repeat_count = v.parse().unwrap_or(0.0),
+            "Reverses" => reverses = v.eq_ignore_ascii_case("true"),
+            "EasingDirection" => easing_direction = v.to_string(),
+            "EasingStyle" => easing_style = v.to_string(),
+            _ => {}
+        }
+    }
+    any.then_some((time, delay_time, repeat_count, reverses, easing_direction, easing_style))
 }
 
 pub fn decode_json(reflection: &Reflection, value: &serde_json::Value) -> Option<Value> {
@@ -480,6 +576,25 @@ pub fn decode_json(reflection: &Reflection, value: &serde_json::Value) -> Option
             }
             _ => Value::Content(Rc::new(ContentValue::None)),
         },
+        "Faces" => Value::Dom(Rc::new(Variant::Faces(parse_faces(map.get("s").and_then(|s| s.as_str()).unwrap_or(""))))),
+        "Axes" => Value::Dom(Rc::new(Variant::Axes(parse_axes(map.get("s").and_then(|s| s.as_str()).unwrap_or(""))))),
+        "PhysicalProperties" => Value::Dom(Rc::new(Variant::PhysicalProperties(dom::PhysicalProperties::Custom(
+            parse_physical_properties(map.get("s").and_then(|s| s.as_str()).unwrap_or(""))?,
+        )))),
+        "Ray" => Value::Dom(Rc::new(Variant::Ray(parse_ray(map.get("s").and_then(|s| s.as_str()).unwrap_or(""))?))),
+        "SecurityCapabilities" => Value::Dom(Rc::new(Variant::SecurityCapabilities(dom::SecurityCapabilities::from_bits(0)))),
+        "TweenInfo" => {
+            let (time, delay_time, repeat_count, reverses, easing_direction, easing_style) =
+                parse_tween_info_parts(map.get("s").and_then(|s| s.as_str()).unwrap_or(""))?;
+            Value::TweenInfo(Rc::new(TweenInfoValue {
+                time,
+                easing_style: reflection.enum_item("EasingStyle", &easing_style)?,
+                easing_direction: reflection.enum_item("EasingDirection", &easing_direction)?,
+                repeat_count,
+                reverses,
+                delay_time,
+            }))
+        }
         _ => return None,
     })
 }
@@ -557,7 +672,8 @@ pub fn from_dom(reflection: &Reflection, value: &Variant) -> Option<Value> {
         | Variant::UniqueId(_)
         | Variant::Vector2int16(_)
         | Variant::Vector3int16(_)
-        | Variant::PhysicalProperties(_) => Value::Dom(Rc::new(value.clone())),
+        | Variant::PhysicalProperties(_)
+        | Variant::SecurityCapabilities(_) => Value::Dom(Rc::new(value.clone())),
         _ => return None,
     })
 }
@@ -568,6 +684,7 @@ pub fn decode_default(reflection: &Reflection, raw: &RawDefault) -> Option<Value
         RawDefault::Json(json) => decode_json(reflection, json),
         RawDefault::Dom(variant) => from_dom(reflection, variant),
         RawDefault::EnumItem(item) => Some(Value::EnumItem(*item)),
+        RawDefault::TweenInfo(info) => Some(Value::TweenInfo(Rc::new(info.clone()))),
         RawDefault::None => None,
     }
 }
@@ -604,10 +721,15 @@ pub fn zero_value(
             style: reflection.enum_item("FontStyle", "Normal")?,
         })),
         ScriptType::Content => Value::Content(Rc::new(ContentValue::None)),
-        _ => {
-            let _ = script_type_name;
-            return None;
-        }
+        _ => match script_type_name {
+            "Region3int16" => Value::Dom(Rc::new(Variant::Region3int16(dom::Region3int16::new(
+                dom::Vector3int16::new(0, 0, 0),
+                dom::Vector3int16::new(0, 0, 0),
+            )))),
+            "Vector3int16" => Value::Dom(Rc::new(Variant::Vector3int16(dom::Vector3int16::new(0, 0, 0)))),
+            "Vector2int16" => Value::Dom(Rc::new(Variant::Vector2int16(dom::Vector2int16::new(0, 0)))),
+            _ => return None,
+        },
     })
 }
 

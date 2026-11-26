@@ -10,7 +10,7 @@ use rbx_dom_weak::types::{self as dom, Variant};
 
 use super::{
     Flow, enum_item_value, instance_value, raw::instance_of_ud, typeof_value,
-    types::{LContent, LEnumItem, LFont},
+    types::{LContent, LEnumItem, LFont, LTweenInfo},
 };
 use crate::{
     Engine, ScriptError,
@@ -52,7 +52,22 @@ pub fn to_lua(lua: &Lua, engine: &Engine, value: &Value) -> LuaResult<LuaValue> 
         }
         Value::Font(font) => LuaValue::UserData(lua.create_any_userdata(LFont(std::cell::RefCell::new((**font).clone())))?),
         Value::Content(content) => LuaValue::UserData(lua.create_any_userdata(LContent::new(lua, (**content).clone()))?),
-        Value::Dom(variant) => dom_to_lua(lua, variant)?,
+        Value::TweenInfo(info) => LuaValue::UserData(lua.create_any_userdata(LTweenInfo {
+            time: LuaValue::Number(info.time),
+            easing_style: info.easing_style,
+            easing_direction: info.easing_direction,
+            repeat_count: LuaValue::Number(info.repeat_count),
+            reverses: info.reverses,
+            delay_time: LuaValue::Number(info.delay_time),
+        })?),
+        Value::Dom(variant) => match &**variant {
+            Variant::SecurityCapabilities(_) => {
+                let make: LuaFunction = engine.prelude().exports.get("ProxyFromFields")?;
+                let names = lua.create_table()?;
+                make.call(("SecurityCapabilities", names))?
+            }
+            _ => dom_to_lua(lua, variant)?,
+        },
         Value::Lua(value) => {
             // (a table or buffer BindableEvent:Fire sent: every receiver gets a copy of its own, lua/bindable.rs)
             if let LuaValue::UserData(userdata) = &**value {
@@ -174,14 +189,16 @@ fn userdata_value(ud: &LuaAnyUserData) -> Option<Value> {
     None
 }
 
-fn type_error(info: &PropertyInfo, engine: &Engine, reflection_name: &str, expected: &str, value: &LuaValue) -> Flow {
-    let _ = reflection_name;
-    // (Roblox names a CFrame property's type CoordinateFrame here: measured in a playing client, Studio 0.744,
-    // tools/parity/probes/coercion.luau)
-    let expected = if expected == "CFrame" { "CoordinateFrame" } else { expected };
+fn type_error(_info: &PropertyInfo, engine: &Engine, written_name: &str, expected: &str, value: &LuaValue) -> Flow {
+    // Roblox names CFrame as CoordinateFrame and Rect as Rect2D in assignment errors
+    // (measured: Studio 0.744 coercion.luau; Roblox Studio 0.748.0.7481526, validator/probe/expected).
+    let expected = match expected {
+        "CFrame" => "CoordinateFrame",
+        "Rect" => "Rect2D",
+        other => other,
+    };
     Flow::Error(ScriptError::plain(format!(
-        "Unable to assign property {}. {expected} expected, got {}",
-        engine.reflection.name(info.name),
+        "Unable to assign property {written_name}. {expected} expected, got {}",
         typeof_value(engine, value)
     )))
 }
@@ -305,7 +322,12 @@ pub fn number_for(engine: &Engine, info: &PropertyInfo, number: f64) -> f64 {
 
 /// Coerce: converts an assigned value to what the property stores, or the assignment error.
 pub fn coerce(lua: &Lua, engine: &Engine, info: &PropertyInfo, value: &LuaValue) -> Result<Value, Flow> {
-    let name = engine.reflection.name(info.name);
+    coerce_as(lua, engine, info, engine.reflection.name(info.name), value)
+}
+
+/// [`coerce`], naming the property as the script wrote it (`written_name`, preserving deprecated lower-case aliases).
+pub fn coerce_as(lua: &Lua, engine: &Engine, info: &PropertyInfo, written_name: &str, value: &LuaValue) -> Result<Value, Flow> {
+    let name = written_name;
     match info.script_type {
         ScriptType::Number => {
             // Any value goes: a string as Luau reads a number, anything else (and a string that is no number) as 0
@@ -329,7 +351,10 @@ pub fn coerce(lua: &Lua, engine: &Engine, info: &PropertyInfo, value: &LuaValue)
                 let content = ud.borrow::<LContent>()?;
                 Ok(Value::String(content.0.uri().cloned().unwrap_or_default()))
             }
-            _ => Err(type_error(info, engine, name, "string", value)),
+            _ => {
+                let expected = if info.engine_type == EngineType::ContentId { "ContentId" } else { "string" };
+                Err(type_error(info, engine, name, expected, value))
+            }
         },
         // Lua truth: only nil and false are false (measured likewise: 0, "" and {} read true)
         ScriptType::Boolean => Ok(Value::Bool(!matches!(value, LuaValue::Nil | LuaValue::Boolean(false)))),
@@ -397,7 +422,7 @@ pub fn coerce(lua: &Lua, engine: &Engine, info: &PropertyInfo, value: &LuaValue)
         ScriptType::Instance => match value {
             LuaValue::Nil => Ok(Value::Nil),
             LuaValue::UserData(ud) if instance_of_ud(ud).is_some() => Ok(Value::Instance(instance_of_ud(ud).unwrap())),
-            _ => Err(type_error(info, engine, name, "Instance", value)),
+            _ => Err(type_error(info, engine, name, info.instance_type.as_deref().unwrap_or("Instance"), value)),
         },
         ScriptType::Content => match value {
             LuaValue::String(s) => Ok(Value::Content(Rc::new(ContentValue::Uri(Str::new(&s.as_bytes()))))),
@@ -502,6 +527,11 @@ pub fn coerce(lua: &Lua, engine: &Engine, info: &PropertyInfo, value: &LuaValue)
                 }
                 return Ok(converted);
             }
+            // Region3int16 properties have no script setter converter in Roblox (Terrain.MaxExtents;
+            // Roblox Studio 0.748.0.7481526, validator/probe/expected).
+            if &*info.script_type_name == "Region3int16" {
+                return Err(Flow::Error(ScriptError::plain(format!("Unable to set property {name}, type Region3int16"))));
+            }
             // nil clears custom physical properties, another type raises (measured in Studio 2026-10-12:
             // BasePart.CustomPhysicalProperties = nil is accepted, also over a set value, and reads back nil; = 5 raises)
             let physical = &*info.engine_type_name == "PhysicalProperties";
@@ -510,7 +540,7 @@ pub fn coerce(lua: &Lua, engine: &Engine, info: &PropertyInfo, value: &LuaValue)
             }
             let actual = typeof_value(engine, value);
             if actual != &*info.script_type_name {
-                if value.is_nil() || info.script_type.strict() || physical {
+                if value.is_nil() || info.script_type.strict() || ScriptType::strict_datatype(&info.script_type_name) || physical {
                     return Err(type_error(info, engine, name, &info.script_type_name, value));
                 }
             }

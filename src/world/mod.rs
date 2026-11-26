@@ -546,8 +546,11 @@ fn world_member(engine: &Rc<Engine>, member: &str, read: fn(&Affine3A) -> Value,
     let mut behaviors = engine.behaviors.borrow_mut();
     behaviors.add_getter(class, name, getter);
     let Some(write) = write else { return };
-    let setter: SetterFn = Rc::new(move |_, engine, id, value| {
-        let assigned = convert::from_lua(&value);
+    let setter: SetterFn = Rc::new(move |lua, engine, id, value| {
+        let assigned = match engine.reflection.class_property(class, name).cloned() {
+            Some(info) => convert::coerce(lua, engine, &info, &value)?,
+            None => convert::from_lua(&value),
+        };
         let (world, parent) = {
             let state = engine.state.borrow();
             (world_cframe(&state, engine, id), hung_from(&state, engine, id))

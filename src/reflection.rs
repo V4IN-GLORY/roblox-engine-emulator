@@ -184,6 +184,37 @@ impl ScriptType {
                 | Self::BrickColor
         )
     }
+
+    /// Concrete Roblox datatype names whose mismatched assignments raise ("Unable to assign property X. T expected"),
+    /// including datatypes parsed as [`ScriptType::Other`] (measured: Roblox Studio 0.748.0.7481526, validator/probe/expected).
+    pub fn strict_datatype(name: &str) -> bool {
+        matches!(
+            name,
+            "Font"
+                | "UDim2"
+                | "UDim"
+                | "Vector2"
+                | "Color3"
+                | "Vector3"
+                | "Rect"
+                | "ColorSequence"
+                | "NumberSequence"
+                | "NumberRange"
+                | "CFrame"
+                | "BrickColor"
+                | "Axes"
+                | "Faces"
+                | "PhysicalProperties"
+                | "Ray"
+                | "TweenInfo"
+                | "SecurityCapabilities"
+                | "DateTime"
+                | "Region3"
+                | "Region3int16"
+                | "Vector2int16"
+                | "Vector3int16"
+        )
+    }
 }
 
 /// Engine storage kinds `Coerce` treats specially.
@@ -238,6 +269,8 @@ pub enum RawDefault {
     Dom(Variant),
     /// An rbx-dom enum default resolved to the interned item
     EnumItem(EnumItemId),
+    /// A TweenInfo default resolved to interned EasingStyle / EasingDirection items
+    TweenInfo(crate::value::TweenInfoValue),
     /// Recorded in the dump, but undecodable (e.g. `null` or an unsupported `$t`)
     None,
 }
@@ -951,6 +984,25 @@ impl Reflection {
                                     key,
                                     RawDefault::Json(serde_json::json!({ "$t": "Font", "v": [family, weight, style] })),
                                 );
+                            }
+                        }
+                        members::ParsedDefault::TweenInfo { time, delay_time, repeat_count, reverses, easing_direction, easing_style } => {
+                            if let (Some(style), Some(direction)) =
+                                (self.enum_item("EasingStyle", &easing_style), self.enum_item("EasingDirection", &easing_direction))
+                            {
+                                map.insert(
+                                    key,
+                                    RawDefault::TweenInfo(crate::value::TweenInfoValue {
+                                        time,
+                                        easing_style: style,
+                                        easing_direction: direction,
+                                        repeat_count,
+                                        reverses,
+                                        delay_time,
+                                    }),
+                                );
+                            } else {
+                                map.insert(key, RawDefault::None);
                             }
                         }
                         members::ParsedDefault::None => {

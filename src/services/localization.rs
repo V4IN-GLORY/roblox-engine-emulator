@@ -1616,18 +1616,21 @@ pub fn install(engine: &Rc<Engine>, behaviors: &mut Behaviors) {
     }
     // SourceLocaleId keeps its locale lower case with `-`; DevelopmentLanguage reads and writes it (measured)
     if let Some(info) = reflection.class_property(table, names.source_locale).cloned() {
-        let set_locale: super::SetterFn = Rc::new(move |lua, engine, id, value| {
-            let coerced = crate::lua::convert::coerce(lua, engine, &info, &value)?;
-            let coerced = match coerced {
-                Value::String(text) => Value::String(Str::new(&locale(text.as_bytes()))),
-                other => other,
-            };
-            crate::lua::instance::set_property(engine, id, names.source_locale, coerced);
-            Ok(())
-        });
-        behaviors.add_setter(table, names.source_locale, set_locale.clone());
+        let make_setter = |prop_info: crate::reflection::PropertyInfo| -> super::SetterFn {
+            Rc::new(move |lua, engine, id, value| {
+                let coerced = crate::lua::convert::coerce(lua, engine, &prop_info, &value)?;
+                let coerced = match coerced {
+                    Value::String(text) => Value::String(Str::new(&locale(text.as_bytes()))),
+                    other => other,
+                };
+                crate::lua::instance::set_property(engine, id, names.source_locale, coerced);
+                Ok(())
+            })
+        };
+        behaviors.add_setter(table, names.source_locale, make_setter(info.clone()));
         if let Some(development) = member("DevelopmentLanguage") {
-            behaviors.add_setter(table, development, set_locale);
+            let dev_info = reflection.class_property(table, development).cloned().unwrap_or(info);
+            behaviors.add_setter(table, development, make_setter(dev_info));
             behaviors.add_getter(table, development, super::getter(move |lua, engine, id| string(lua, &string_of(&engine.state.borrow(), id, names.source_locale)).map_err(Flow::from)));
         }
     }

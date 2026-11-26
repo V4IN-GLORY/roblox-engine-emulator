@@ -437,13 +437,14 @@ fn view_behaviours(name: NameId, source: NameId, extra: f64, read: ReadFn, write
     let setter: SetterFn = Rc::new(move |lua, engine, id, value| {
         let instance_class = engine.state.borrow().dom.at(id).class;
         let info = engine.reflection.class_property(instance_class, name).cloned();
-        if info.as_ref().is_some_and(|i| i.read_only) {
-            return raise(format!("Unable to assign property {}. Property is read only", engine.reflection.name(name)));
-        }
+        // Type check runs before the read-only check (Roblox Studio 0.748.0.7481526, validator/probe/expected).
         let coerced = match &info {
             Some(info) => convert::coerce(lua, engine, info, &value)?,
             None => convert::from_lua(&value),
         };
+        if info.as_ref().is_some_and(|i| i.read_only) {
+            return raise(format!("Unable to assign property {}. Property is read only", engine.reflection.name(name)));
+        }
         let hooks = engine.hooks.borrow();
         let mut state = engine.state.borrow_mut();
         (write)(&mut state, &engine.reflection, &hooks, id, coerced);

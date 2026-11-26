@@ -915,7 +915,7 @@ pub fn read_value(value: Option<&crate::Value>) -> f64 {
         Some(Value::Instance(_) | Value::NoInstance) => READ_INSTANCE_EXTRA,
         Some(Value::Vector2(_)) => 11.0e-9,
         Some(Value::Color3(_)) => 19.0e-9,
-        Some(Value::UDim(_) | Value::UDim2(_) | Value::Rect(_) | Value::NumberRange(_) | Value::Font(_) | Value::Content(_)) => 12.0e-9,
+        Some(Value::UDim(_) | Value::UDim2(_) | Value::Rect(_) | Value::NumberRange(_) | Value::Font(_) | Value::Content(_) | Value::TweenInfo(_)) => 12.0e-9,
         Some(Value::NumberSequence(_) | Value::ColorSequence(_)) => 40.0e-9,
         // (a CFrame, BrickColor, PhysicalProperties and the other rbx-dom datatypes)
         Some(Value::Dom(_)) => 26.0e-9,
