@@ -21,6 +21,53 @@ We don't need pixel-perfect Roblox. We need **what a script can see** to match R
 
 ree's **default context is client**. Server-only services (DataStore, MemoryStore, MessagingService, server side of remotes) only exist with `--mode play --run-context server`. `validate.py` always passes the context explicitly. Test every package in **both** contexts.
 
+## The surface diff (the main measure)
+
+`validator/probe/expected/surface_{server,client}.txt` is what real Roblox (Studio 0.748 playtest, game script identity)
+printed for SurfaceProbe: every documented in-game class reached, every member read, every property written with a
+bad value, every method called with no args (`c0`), with a wrong-typed arg (`cw`) and with valid sample args (`cv`,
+with the types it returned), and classes only a method hands out probed on what those calls returned (`R`). `python validator/probe/surface_diff.py` runs the
+same probe in ree and counts the lines that differ, by kind (`--list <kind>` shows them). Every change has to bring a
+count down without raising another.
+
+- Spec from the creator docs: `make_surface_spec.py --docs <creator-docs>/content/en-us/reference/engine` (only
+  documented classes; members a normal script may use).
+- Re-capture after a Roblox update: `lune run validator/probe/surface.luau pack <probe.rbxm>`, import it into a playtest
+  server's ReplicatedStorage (robloxstudio MCP `import_rbxm`), run it on server and client, export
+  `ServerStorage.SurfaceResults` and `lune run validator/probe/surface.luau unpack <results.rbxm> <dir>`.
+- `expected/unpublished.txt`: errors the capture place gives only because it is unpublished, left out of the diff.
+- `expected/crashes.txt`: valid calls that crash Studio or end the playtest, skipped in both engines. `python
+  validator/probe/studio.py open` launches Studio on a throwaway place; `studio.py crash` names the call that was running
+  when Studio died (set `_G.SurfaceProbeLog = true` before the probe runs, so each call is logged first).
+
+## How a method behaves (the three tiers)
+
+Every call first checks its arguments like Roblox (ArgChecks). After that:
+
+| tier | when | what ree does | example |
+|---|---|---|---|
+| 1 real | local and cheap | does the real work, because later code can depend on the exact result | `EncodingService:Base64Encode`, `HttpService:JSONEncode`, CFrame math |
+| 2 faked | needs Roblox's servers | runs the method's own checks, returns a fake answer with the right shape, fires the follow-up events | `GetProductInfo` → table with `Name`, `PriceInRobux`, ...; `PromptProductPurchase` → `PromptProductPurchaseFinished` |
+| 3 fallback | everything else | returns a value of the type Roblox returns (the capture's `cv` line), listed under `stubbed`, counted as ok | `GetHumanoidDescriptionFromUserId` → a fresh `HumanoidDescription` |
+
+## Plan
+
+| # | step | who | depends on |
+|---|---|---|---|
+| 0 | Measure: surface probe, server + client captures, crash list (`expected/crashes.txt`), valid-call return types (`cv`) | orchestrator | done |
+| 1a | [ArgChecks](packages/ArgChecks.md): every method checks args like Roblox | Opus | 0 |
+| 1b | [ClassReach](packages/ClassReach.md): hidden services, default instances, enums, `User` | Gemini | 0 |
+| 1c | [PropertyAccess](packages/PropertyAccess.md): write error rules, nil reads | Gemini | 1a (shares `raw.rs`) |
+| 1d | [Fallback](packages/Fallback.md) (tier 3): methods return what Roblox returns, `stubbed` field in validate.py; inherited behaviours a subclass misses | Opus | 1a |
+| 2 | Behaviour packages (tier 2), table below, on top of 1a | Gemini each | 1a, 1d |
+| 3 | Coverage: fire every connected handler once after a run with typed fake args; luau-lsp static check as a `warnings` field | Opus | 1a |
+| 4 | API dump bump to 0.748 (the 48 members ree doesn't know yet), re-capture | orchestrator | after 1-3 land |
+| 5 | Dataset scale: many rows per ree process (`--batch`), timing per row | orchestrator | 1-3 |
+| 6 | Upstream PRs to REE: one change per PR (AGENTS.md), each with tests, `docs/engine.md`, the capture as measurement, AI disclosure. Only when the user says so | orchestrator | user's go |
+
+Done for the whole thing: `surface_diff.py` shows only lines left on purpose (each listed with why), the behaviour
+packages' specs pass, `cargo test --release` and the parity probes pass.
+
 ## Packages: one agent each
 
 | package | file you own | brief |

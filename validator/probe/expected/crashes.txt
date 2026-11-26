@@ -1,0 +1,10 @@
+# methods whose valid-args call (cv) crashes Roblox Studio or ends the playtest (StudioTestService.EndTest: Studio logs
+# "Handling test has ended" about a second later, both times) 0.748.0.7481526 with the probe's sample args: all three
+# crashing runs (2026-11-26) end in the Studio log right after "Reporting success ... for operation Fragment /
+# GenerateFragmentSites". SweepPartAsync: the last PROBE-AT line before a crash, with calls run one at a time
+# (2026-11-26). The probe prints "cv skipped" for these in both engines.
+GeometryService.FragmentAsync
+GeometryService.GenerateFragmentSites
+GeometryService.SweepPartAsync
+SocialService.CanSendCallInviteAsync
+StudioTestService.EndTest

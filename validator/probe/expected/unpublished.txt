@@ -1,0 +1,3 @@
+# errors the capture place gives only because it was never published; the dataset's code runs in published games, so
+# probe lines whose Roblox side contains one of these are left out of the diff
+You must publish this place
