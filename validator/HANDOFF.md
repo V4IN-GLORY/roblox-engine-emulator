@@ -13,7 +13,8 @@ We don't need pixel-perfect Roblox. We need **what a script can see** to match R
   cargo build --release --locked --bin ree
   ```
 - Run one file: `python validator/validate.py some.luau --context server|client` → `{"ok", "errors", "unemulated"}`.
-- See what's still missing: `python validator/probe/gaps.py --classes Humanoid,ContextActionService`.
+- See what's still missing: `python validator/probe/gaps.py --classes Humanoid,ContextActionService`. The probe has blind spots: on a server it lists no Humanoid gaps, yet `TakeDamage` is unemulated there. Your specs are the real check.
+- `validator/specs/Humanoid/TakeDamage.{ok,bad}.luau` are worked examples of the spec format, and both fail today on purpose.
 - Repo's own guide: `AGENTS.md`, `docs/engine.md`, and `docs/cli.md` for run contexts. Read the section for the area you touch.
 
 ## Run contexts (read this first)
