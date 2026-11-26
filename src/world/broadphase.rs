@@ -1041,7 +1041,7 @@ fn take_in_world(state: &mut State, engine: &Engine, world: Option<u32>, root: I
                     }
                 }
                 // (not in its index yet: read in now)
-                _ if state.dom.home(part) == Some(root) => put(state, engine, names, world, part),
+                _ if is_part(engine, names, state.dom.at(part).class) && state.dom.home(part) == Some(root) => put(state, engine, names, world, part),
                 _ => {}
             }
         }

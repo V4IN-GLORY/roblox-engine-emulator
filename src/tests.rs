@@ -14950,3 +14950,128 @@ fn hashes_cost_the_work_clock_what_other_encoding_calls_do() {
     assert_eq!(crate::cost::method("ComputeBufferHash"), crate::cost::CALL);
     assert_eq!(crate::cost::method("ComputeStringHash"), crate::cost::CALL);
 }
+
+/// Hidden services, side-specific service errors, default play-mode DataModel instances, Instance.new capability
+/// checks, the User datatype and the DebuggerManager global (Roblox Studio 0.748.0.7481526, validator/probe/expected).
+#[test]
+fn class_reach_hidden_services_default_instances_user_and_debugger_manager() {
+    let run_ctx = |mode: &str, run_context: crate::RunContext, studio: bool, script: &str| {
+        let options = Options {
+            mode: mode.into(),
+            run_context,
+            studio,
+            local_player: run_context != crate::RunContext::Server,
+            ..Options::default()
+        };
+        let (lua, engine) = start_with(options);
+        let lines = run(&lua, &engine, script);
+        drop(lua);
+        engine.teardown();
+        lines
+    };
+
+    // Play server: hidden services (including side-specific), NetworkClient refusal, default instances, Instance.new capability checks
+    let server_lines = run_ctx(
+        "play",
+        crate::RunContext::Server,
+        true,
+        r##"
+        assert(game:FindFirstChildWhichIsA("BaseCoreGuiConfiguration", true) == nil)
+        for _, Name in {
+            "CacheableContentProvider", "CoreGui", "DraftsService", "DraggerService", "FlagStandService",
+            "Hopper", "ILegacyStudioBridge", "InstanceFileSyncService", "LoginService", "PlaceSettings",
+            "PluginConnectionService", "PluginDebugService", "ScriptDebuggerService", "ScriptEditorService",
+            "SerializationService", "StopWatchReporter", "StudioCaptureService", "StudioDeviceSimulatorService",
+            "StudioService", "ControllerService", "HSRDataContentProvider", "MeshContentProvider",
+            "SolidModelContentProvider",
+        } do
+            assert(game:GetService(Name) == nil and game:FindService(Name) == nil, Name)
+        end
+        assert(game:GetService("ClusterPacketCache") ~= nil)
+        assert(game:GetService("ConfigureServerService") ~= nil)
+        local OkClient, ErrClient = pcall(game.GetService, game, "NetworkClient")
+        assert(not OkClient and ErrClient == "The current thread cannot create 'NetworkClient' (lacking capability Plugin)", tostring(ErrClient))
+        assert(game:FindService("NetworkClient") == nil)
+        assert(game:FindFirstChildWhichIsA("NetworkPeer", true).ClassName == "NetworkServer")
+
+        assert(game:FindFirstChildWhichIsA("TextChatConfigurations", true).ClassName == "ChatWindowConfiguration")
+        local CoreCfg = game:GetService("CoreGuiConfiguration")
+        assert(CoreCfg.PlayerListConfiguration == nil and CoreCfg.SelfViewConfiguration == nil)
+        for _, ClassName in {
+            "BubbleChatConfiguration", "ChannelTabsConfiguration", "ChatInputBarConfiguration",
+            "ChatWindowConfiguration", "PlayerListConfiguration", "SelfViewConfiguration",
+            "ScreenshotHud", "Terrain",
+        } do
+            assert(game:FindFirstChildWhichIsA(ClassName, true) ~= nil, ClassName)
+        end
+
+        for _, Case in {
+            { "CustomLog", "InternalTest" },
+            { "PluginAction", "Plugin" },
+            { "PluginCapabilities", "Plugin" },
+            { "StandalonePluginScripts", "Plugin" },
+        } do
+            local Ok, Err = pcall(Instance.new, Case[1])
+            assert(not Ok and Err == `The current thread cannot create '{Case[1]}' (lacking capability {Case[2]})`, `{Case[1]}: {Err}`)
+        end
+        assert(typeof(DebuggerManager) == "function")
+        print("server ok")
+        "##,
+    );
+    assert!(server_lines.contains(&"print: server ok".to_string()), "{server_lines:?}");
+
+    // Play client: client-hidden services, NetworkServer refusal, server-hidden services reachable, User datatype, --studio false hides DebuggerManager
+    let client_lines = run_ctx(
+        "play",
+        crate::RunContext::Client,
+        false,
+        r##"
+        for _, Name in { "CoreGui", "StudioService", "ScriptEditorService", "ClusterPacketCache", "ConfigureServerService", "CacheableContentProvider" } do
+            assert(game:GetService(Name) == nil and game:FindService(Name) == nil, Name)
+        end
+        for _, Name in { "ControllerService", "HSRDataContentProvider", "MeshContentProvider", "SolidModelContentProvider" } do
+            assert(game:GetService(Name) ~= nil, Name)
+        end
+        local OkServer, ErrServer = pcall(game.GetService, game, "NetworkServer")
+        assert(not OkServer and ErrServer == "The current thread cannot create 'NetworkServer' (lacking capability RobloxEngine)", tostring(ErrServer))
+        assert(game:FindService("NetworkServer") == nil)
+        assert(DebuggerManager == nil)
+
+        -- User datatype
+        assert(typeof(User.fromId) == "function" and typeof(User.fromString) == "function")
+        local U = User.fromId(42)
+        assert(typeof(U) == "User" and U.Id == 42 and U.DomainId == 0)
+        assert(typeof(U.DomainType) == "EnumItem" and U.DomainType.EnumType == Enum.DomainType)
+        local Encoded = U:ToString()
+        assert(type(Encoded) == "string" and tostring(U) == Encoded)
+        local Round = User.fromString(Encoded)
+        assert(Round == U and Round.Id == 42 and Round.DomainId == 0 and Round ~= User.fromId(43))
+        assert(getmetatable(U) == "The metatable is locked")
+        local OkWrite, ErrWrite = pcall(function() (U :: any).Id = 1 end)
+        assert(not OkWrite and ErrWrite == "Id member of User is read-only and cannot be assigned to", tostring(ErrWrite))
+        local OkBadStr, ErrBadStr = pcall(User.fromString, "not-a-user")
+        assert(not OkBadStr and ErrBadStr == "Invalid User string", tostring(ErrBadStr))
+        local OkBadId = pcall(User.fromId, "nope")
+        assert(not OkBadId)
+        local OkLibWrite = pcall(function() (User :: any).Extra = 1 end)
+        assert(not OkLibWrite)
+        print("client ok")
+        "##,
+    );
+    assert!(client_lines.contains(&"print: client ok".to_string()), "{client_lines:?}");
+
+    // Edit mode keeps plugin services and plugin-creatable instances working
+    let edit_lines = run_ctx(
+        "edit",
+        crate::RunContext::Client,
+        true,
+        r##"
+        assert(game:GetService("CoreGui") ~= nil and game:GetService("StudioService") ~= nil and game:GetService("ScriptEditorService") ~= nil)
+        assert(Instance.new("PluginAction").ClassName == "PluginAction")
+        local OkCustom, ErrCustom = pcall(Instance.new, "CustomLog")
+        assert(not OkCustom and ErrCustom == "The current thread cannot create 'CustomLog' (lacking capability InternalTest)", tostring(ErrCustom))
+        print("edit ok")
+        "##,
+    );
+    assert!(edit_lines.contains(&"print: edit ok".to_string()), "{edit_lines:?}");
+}

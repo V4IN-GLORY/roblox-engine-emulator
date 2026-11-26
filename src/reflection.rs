@@ -559,6 +559,16 @@ pub const CAPABILITY_ONLY: &[(&str, &str, &str)] = &[
     ("PhysicsSettings", "TorqueDrawScale", "RobloxScript"),
 ];
 
+/// Classes a game script may not create with `Instance.new` (Roblox Studio 0.748.0.7481526, validator/probe/expected):
+/// (class, the capability it lacks). `Plugin` classes stay creatable in edit mode (plugin code). `Player` (`WritePlayer`) is
+/// intentionally left creatable so server tests and lobby harnesses can add joining players.
+pub const CAPABILITY_CREATE: &[(&str, &str)] = &[
+    ("CustomLog", "InternalTest"),
+    ("PluginAction", "Plugin"),
+    ("PluginCapabilities", "Plugin"),
+    ("StandalonePluginScripts", "Plugin"),
+];
+
 /// Methods a game script may not call: (class, name, the capability it lacks). A playing client's and a server's game
 /// script (script identity 2, Studio 0.747) read each as a function, and a call raises "The current thread cannot call
 /// 'DefineFastInt' (lacking capability RobloxScript)", a string error pcall catches, before the arguments or the

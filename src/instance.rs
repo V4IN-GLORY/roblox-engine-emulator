@@ -125,6 +125,11 @@ pub fn new_instance(
     class_name: &str,
     parent: Option<InstanceId>,
 ) -> ScriptResult<InstanceId> {
+    if let Some(&(_, capability)) = crate::reflection::CAPABILITY_CREATE.iter().find(|&&(name, _)| name == class_name) {
+        if !(state.edit_mode && capability == "Plugin") {
+            return Err(ScriptError::plain(format!("The current thread cannot create '{class_name}' (lacking capability {capability})")));
+        }
+    }
     let class = reflection
         .class_id(class_name)
         .filter(|&class| reflection.class(class).creatable)

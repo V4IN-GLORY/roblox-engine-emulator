@@ -97,20 +97,6 @@
 			"why": "Roblox keeps one compiled chunk per source text: a module whose Source matches an earlier module's carries that module's chunk name (not emulated: ree names every module by its own full name)"
 		}
 	],
-	"core_services": [
-		{
-			"line": "CoreGui get nil",
-			"why": "ree answers a service a plugin or the command bar may use (identity 4 gets it in the same capture), since edit-mode code that Studio runs as a plugin parents its previews to CoreGui; a game script (identity 2) gets nil"
-		},
-		{
-			"line": "StudioService get nil",
-			"why": "ree answers a service a plugin or the command bar may use (identity 4 gets it in the same capture), since edit-mode code that Studio runs as a plugin parents its previews to CoreGui; a game script (identity 2) gets nil"
-		},
-		{
-			"line": "ScriptEditorService get nil",
-			"why": "ree answers a service a plugin or the command bar may use (identity 4 gets it in the same capture), since edit-mode code that Studio runs as a plugin parents its previews to CoreGui; a game script (identity 2) gets nil"
-		}
-	],
 	"engine_functions": [
 		{
 			"line": "same signal.Connect false",

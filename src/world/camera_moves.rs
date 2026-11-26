@@ -519,6 +519,7 @@ pub(super) fn install(engine: &Rc<Engine>, behaviors: &mut Behaviors, camera_cla
     if let (Some(world_root), Some(world_model), Some(base_part), Some(data_model)) =
         (engine.reflection.class_id("WorldRoot"), engine.reflection.class_id("WorldModel"), engine.reflection.class_id("BasePart"), engine.reflection.class_id("DataModel"))
     {
+        let terrain = engine.reflection.class_id("Terrain");
         let reflection = engine.reflection.clone();
         hooks.hierarchy_changed.push(Box::new(move |state, id, old, new| {
             let models = state.dom.count_of_class(world_model) > 0;
@@ -585,7 +586,7 @@ pub(super) fn install(engine: &Rc<Engine>, behaviors: &mut Behaviors, camera_cla
                     state.cameras.unindexed_models.remove(&node);
                     super::broadphase::world_gone(state, node);
                 }
-                if is_a(state, node, base_part) {
+                if is_a(state, node, base_part) && !terrain.is_some_and(|t| is_a(state, node, t)) {
                     parts.push((node, below));
                 }
             }

@@ -288,6 +288,7 @@ pub fn register(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
     register_random(lua, engine)?;
     register_date_time(lua, engine)?;
     register_instance_handle(lua, engine)?;
+    register_user(lua, engine)?;
     super::curve_keys::register(lua, engine)?;
     super::shared_table::register(lua, engine)?;
     Ok(())
@@ -432,6 +433,163 @@ fn register_instance_handle(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
     )?;
     library.set_readonly(true);
     engine.lua.borrow_mut().libraries.insert("InstanceHandle", library);
+    Ok(())
+}
+
+// User
+
+/// A domain-scoped User identity (`User.fromId`, `User.fromString`, `Id`, `DomainType`, `DomainId`, `ToString`), per Roblox's
+/// `User` datatype documentation and the Roblox Studio 0.748.0.7481526 capture (`validator/probe/expected`, which checks
+/// `User.fromId` and `User.fromString`). Implemented in `src/lua/types.rs` alongside `InstanceHandle` and `DateTime` because
+/// `lune-roblox` does not provide `User`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LUser {
+    pub id: i64,
+    pub domain_type: Str,
+    pub domain_id: i64,
+}
+
+impl LUser {
+    fn to_string_repr(&self) -> String {
+        format!("u1_{}_{}_{}", self.domain_type.to_str_lossy(), self.domain_id, self.id)
+    }
+
+    fn parse(text: &str) -> Option<Self> {
+        let mut parts = text.split('_');
+        if parts.next()? != "u1" {
+            return None;
+        }
+        let domain_type = parts.next()?;
+        if domain_type.is_empty() || !domain_type.bytes().all(|b| b.is_ascii_alphabetic()) {
+            return None;
+        }
+        let domain_id: i64 = parts.next()?.parse().ok()?;
+        let id: i64 = parts.next()?.parse().ok()?;
+        if parts.next().is_some() {
+            return None;
+        }
+        Some(Self { id, domain_type: Str::from(domain_type), domain_id })
+    }
+}
+
+fn user_of(value: &LuaValue) -> Option<LUser> {
+    match value {
+        LuaValue::UserData(ud) => ud.borrow::<LUser>().ok().map(|user| user.clone()),
+        _ => None,
+    }
+}
+
+fn make_user(lua: &Lua, user: LUser) -> LuaResult<LuaValue> {
+    Ok(LuaValue::UserData(lua.create_any_userdata(user)?))
+}
+
+#[inline(never)]
+fn register_user(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
+    let e = engine.clone();
+    let to_string_call = super::create_boxed_fn(lua, Box::new(move |lua, args: LuaMultiValue| {
+        let args = Args::new(args);
+        super::encode(lua, match user_of(args.get(0)) {
+            Some(user) => Ok(values([LuaValue::String(lua.create_string(user.to_string_repr())?)])),
+            None if args.is_empty() => raise_at_caller("missing argument #1 to 'ToString' (User expected)"),
+            None => raise_at_caller(format!("invalid argument #1 to 'ToString' (User expected, got {})", typeof_value(&e, args.get(0)))),
+        })
+    }))?;
+    let to_string_method = super::cfunction::over_rust(lua, "ToString", super::cfunction::Kind::Served, to_string_call.clone())?;
+    let e = engine.clone();
+    let index = wrapped(lua, engine, "__index", move |lua, args| {
+        let args = Args::new(args);
+        let Some(user) = user_of(args.get(0)) else {
+            return unknown_member(&e, args.get(1), "User", false);
+        };
+        if let LuaValue::String(key) = args.get(1) {
+            match &*key.as_bytes() {
+                b"Id" => return Ok(values([LuaValue::Number(user.id as f64)])),
+                b"DomainId" => return Ok(values([LuaValue::Number(user.domain_id as f64)])),
+                b"DomainType" => {
+                    // 0.748 uses Experience/Group/OAuth while the 0.747 dump still has EXPERIENCE/OAUTH
+                    let name = user.domain_type.to_str_lossy();
+                    let item = e.reflection.enum_item("DomainType", &name).or_else(|| e.reflection.enum_item("DomainType", &name.to_ascii_uppercase()));
+                    return Ok(values([match item {
+                        Some(item) => enum_item_value(lua, &e, item)?,
+                        None => LuaValue::Nil,
+                    }]));
+                }
+                b"ToString" => return Ok(values([LuaValue::Function(to_string_method.clone())])),
+                _ => {}
+            }
+        }
+        unknown_member(&e, args.get(1), "User", false)
+    })?;
+    let newindex = read_only_members(lua, engine, "User", &["Id", "DomainType", "DomainId"])?;
+    let tostring = super::create_boxed_val(lua, Box::new(|lua, this| {
+        let text = user_of(&this).map(|u| u.to_string_repr()).unwrap_or_default();
+        Ok(LuaValue::String(lua.create_string(text)?))
+    }))?;
+    let eq = super::create_boxed_val2(lua, Box::new(|_, a, b| {
+        Ok(LuaValue::Boolean(matches!((user_of(&a), user_of(&b)), (Some(a), Some(b)) if a == b)))
+    }))?;
+    lua.register_userdata_type::<LUser>(|registry| {
+        registry.add_meta_field("__type", "User");
+        registry.add_meta_field("__index", index);
+        registry.add_meta_field("__newindex", newindex);
+        registry.add_meta_field("__tostring", tostring);
+        registry.add_meta_field("__eq", eq);
+    })?;
+    let sample = lua.create_any_userdata(LUser { id: 0, domain_type: Str::from("Experience"), domain_id: 0 })?;
+    lock_metatable(lua, &sample)?;
+    let calls = lua.create_table()?;
+    calls.raw_set("ToString", to_string_call)?;
+    super::raw::set_table_namecall(lua, &sample, calls, "User", lua.create_table()?)?;
+
+    let library = lua.create_table()?;
+    let e = engine.clone();
+    library.set(
+        "fromId",
+        wrapped(lua, engine, "fromId", move |lua, args| {
+            let args = Args::new(args);
+            if args.is_empty() {
+                return raise_at_caller("missing argument #1 to 'fromId' (number expected)");
+            }
+            let number = match args.get(0) {
+                LuaValue::Number(n) => Some(*n),
+                LuaValue::Integer(n) => Some(*n as f64),
+                LuaValue::String(_) => lua.coerce_number(args.get(0).clone()).ok().flatten(),
+                _ => None,
+            };
+            let Some(number) = number else {
+                return raise_at_caller(format!("invalid argument #1 to 'fromId' (number expected, got {})", typeof_value(&e, args.get(0))));
+            };
+            if !number.is_finite() {
+                return raise_plain("Invalid User id");
+            }
+            let domain_id = e.options.profile.game.game_id() as i64;
+            Ok(values([make_user(lua, LUser { id: number.trunc() as i64, domain_type: Str::from("Experience"), domain_id })?]))
+        })?,
+    )?;
+    let e = engine.clone();
+    library.set(
+        "fromString",
+        wrapped(lua, engine, "fromString", move |lua, args| {
+            let args = Args::new(args);
+            if args.is_empty() {
+                return raise_at_caller("missing argument #1 to 'fromString' (string expected)");
+            }
+            let text = match args.get(0) {
+                LuaValue::String(s) => Some(s.to_string_lossy()),
+                LuaValue::Number(_) | LuaValue::Integer(_) => lua.coerce_string(args.get(0).clone()).ok().flatten().map(|s| s.to_string_lossy()),
+                _ => None,
+            };
+            let Some(text) = text else {
+                return raise_at_caller(format!("invalid argument #1 to 'fromString' (string expected, got {})", typeof_value(&e, args.get(0))));
+            };
+            let Some(user) = LUser::parse(&text) else {
+                return raise_plain("Invalid User string");
+            };
+            Ok(values([make_user(lua, user)?]))
+        })?,
+    )?;
+    library.set_readonly(true);
+    engine.lua.borrow_mut().libraries.insert("User", library);
     Ok(())
 }
 

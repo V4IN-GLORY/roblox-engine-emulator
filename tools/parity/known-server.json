@@ -89,28 +89,6 @@
 			"why": "Roblox keeps one compiled chunk per source text: a module whose Source matches an earlier module's carries that module's chunk name (not emulated: ree names every module by its own full name)"
 		}
 	],
-	"core_services": [
-		{
-			"line": "CoreGui get nil",
-			"why": "ree answers a service a plugin or the command bar may use (identity 4 gets it in the same capture), since edit-mode code that Studio runs as a plugin parents its previews to CoreGui; a game script (identity 2) gets nil"
-		},
-		{
-			"line": "StudioService get nil",
-			"why": "ree answers a service a plugin or the command bar may use (identity 4 gets it in the same capture), since edit-mode code that Studio runs as a plugin parents its previews to CoreGui; a game script (identity 2) gets nil"
-		},
-		{
-			"line": "ScriptEditorService get nil",
-			"why": "ree answers a service a plugin or the command bar may use (identity 4 gets it in the same capture), since edit-mode code that Studio runs as a plugin parents its previews to CoreGui; a game script (identity 2) gets nil"
-		},
-		{
-			"line": "NetworkClient get-error The current thread cannot create 'NetworkClient' (lacking capability Plugin)",
-			"why": "a server has no NetworkClient and a game script may not make one; ree makes the service on either side"
-		},
-		{
-			"line": "NetworkClient find ok nil",
-			"why": "a server has no NetworkClient; ree's probe line is the service it made"
-		}
-	],
 	"engine_functions": [
 		{
 			"line": "same signal.Connect false",
@@ -207,6 +185,10 @@
 		{
 			"line": "error require-number | Downloading asset failed for asset id 5.  Is the asset id correct and is the asset type \"Model\"?",
 			"why": "require(assetId) on a server downloads the asset and names it when that fails (Downloading asset failed for asset id 5 ...); ree runs offline and refuses with its own message"
+		},
+		{
+			"line": "globals shared=table _G=table _VERSION=string workspace=userdata Workspace=userdata game=userdata Game=userdata script=userdata plugin=nil settings=function UserSettings=function tick=function time=function elapsedTime=function wait=function delay=function spawn=function ypcall=function printidentity=function stats=function version=function PluginManager=function LoadLibrary=nil collectgarbage=function gcinfo=function require=function unpack=function Stats=function warn=function DebuggerManager=nil utf8=table buffer=table vector=table task=table bit32=table",
+			"why": "a Studio 0.748 playtest exposes DebuggerManager as a global function (validator/probe/expected), whereas the headless 0.747 capture left it nil; --studio false leaves it nil"
 		}
 	],
 	"grid_limits": [

@@ -750,6 +750,34 @@ pub fn start(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
     for name in START_SERVICES {
         services::get_service(engine, game, name).map_err(flow_error)?;
     }
+    // Default DataModel instances present in a fresh Roblox play session (Roblox Studio 0.748.0.7481526,
+    // validator/probe/expected); edit mode keeps its existing start numbering for host UI previews.
+    if !options.edit_mode() {
+        let _ = crate::world::terrain(engine, workspace);
+        let default_children: &[(&str, &[&str])] = &[
+            (
+                "TextChatService",
+                &["ChatWindowConfiguration", "ChatInputBarConfiguration", "BubbleChatConfiguration", "ChannelTabsConfiguration"],
+            ),
+            ("GuiService", &["ScreenshotHud"]),
+        ];
+        for &(service_name, children) in default_children {
+            let Ok(service) = services::get_service(engine, game, service_name) else { continue };
+            let hooks = engine.hooks.borrow();
+            let mut state = engine.state.borrow_mut();
+            for &child_name in children {
+                let Some(child_class) = reflection.class_id(child_name) else { continue };
+                if state.dom.find_child_of_class(service, child_class).is_some() {
+                    continue;
+                }
+                let child = core::create_named(&mut state, &reflection, child_class, child_name);
+                core::set_parent(&mut state, &reflection, &hooks, child, Some(service)).map_err(|e| LuaError::runtime(e.message))?;
+            }
+        }
+        if options.server() {
+            let _ = services::get_service(engine, game, "NetworkServer");
+        }
+    }
     instance::lock(lua, engine, game)?;
 
     let shared = build_shared(lua, engine)?;
@@ -1215,6 +1243,11 @@ fn build_shared(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<LuaTable> {
     shared.raw_set("Stats", named(lua, "Stats", Library, stats)?)?;
     shared.raw_set("shared", lua.create_table()?)?;
     shared.raw_set("PluginManager", named(lua, "PluginManager", Library, super::create_boxed_unit(lua, Box::new(|_| Ok(LuaValue::Nil)))?)?)?;
+    // Studio's DebuggerManager global (Roblox Studio 0.748.0.7481526, validator/probe/expected): present as a function
+    // in Studio sessions and absent in live games (`--studio false`).
+    if engine.options.studio {
+        shared.raw_set("DebuggerManager", named(lua, "DebuggerManager", Library, super::create_boxed_unit(lua, Box::new(|_| Ok(LuaValue::Nil)))?)?)?;
+    }
     let print: LuaFunction = exports.get("Print")?;
     shared.raw_set(
         "printidentity",
@@ -1233,7 +1266,7 @@ fn build_shared(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<LuaTable> {
     }
 
     // Datatypes: engine types, prelude proxies, then Lune-backed script libraries
-    for name in ["Content", "DateTime", "FloatCurveKey", "Font", "InstanceHandle", "Random", "RotationCurveKey", "SharedTable", "TweenInfo"] {
+    for name in ["Content", "DateTime", "FloatCurveKey", "Font", "InstanceHandle", "Random", "RotationCurveKey", "SharedTable", "TweenInfo", "User"] {
         let library = engine.lua.borrow().libraries.get(name).cloned().expect("library");
         shared.raw_set(name, library)?;
     }

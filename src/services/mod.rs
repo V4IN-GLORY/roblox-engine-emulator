@@ -403,20 +403,87 @@ fn vector2(lua: &Lua, x: f64, y: f64) -> LuaResult<LuaValue> {
     Ok(LuaValue::UserData(lune_roblox::datatypes::create::vector2(lua, vector)?))
 }
 
-/// Services Roblox keeps for its own scripts: a script's `game:GetService` answers nil for them, with no error (Studio 0.747,
-/// a play session's client and server at script identity 2 and a client at identity 4, the command bar's:
-/// tools/parity/probes/core_services.luau). At identity 2 CoreGui, StudioService and ScriptEditorService are nil as well, and a
-/// server refuses NetworkClient; ree answers those as identity 4 does, since edit-mode code that Studio runs as a plugin
-/// parents its previews to CoreGui.
+/// Services Roblox keeps for its own scripts: a script's `game:GetService` and `FindService` answer nil for them, with no error
+/// (Studio 0.747 tools/parity/probes/core_services.luau; extended from Roblox Studio 0.748.0.7481526, validator/probe/expected).
 pub const ROBLOX_ONLY_SERVICES: &[&str] = &[
     "AppStorageService",
     "CSGDictionaryService",
+    "CacheableContentProvider",
     "CorePackages",
     "CoreScriptSyncService",
+    "DraftsService",
+    "DraggerService",
+    "FlagStandService",
+    "Hopper",
+    "ILegacyStudioBridge",
+    "InstanceFileSyncService",
+    "LoginService",
+    "PlaceSettings",
+    "PluginConnectionService",
+    "PluginDebugService",
     "PluginGuiService",
     "RobloxPluginGuiService",
     "RobloxReplicatedStorage",
+    "ScriptDebuggerService",
+    "SerializationService",
+    "StopWatchReporter",
+    "StudioCaptureService",
+    "StudioDeviceSimulatorService",
 ];
+
+/// Services hidden from game scripts (play mode, script identity 2) that plugin / edit-mode code still reaches (edit-mode code
+/// that Studio runs as a plugin parents its previews to CoreGui; measured on Studio 0.747 tools/parity/probes/core_services.luau
+/// and Roblox Studio 0.748.0.7481526, validator/probe/expected).
+pub const PLUGIN_ONLY_SERVICES: &[&str] = &[
+    "CoreGui",
+    "ScriptEditorService",
+    "StudioService",
+];
+
+/// Client-only services that answer nil on a play server (Roblox Studio 0.748.0.7481526, validator/probe/expected).
+pub const SERVER_HIDDEN_SERVICES: &[&str] = &[
+    "ControllerService",
+    "HSRDataContentProvider",
+    "MeshContentProvider",
+    "SolidModelContentProvider",
+];
+
+/// Server-only services that answer nil on a play client (Roblox Studio 0.748.0.7481526, validator/probe/expected).
+pub const CLIENT_HIDDEN_SERVICES: &[&str] = &[
+    "ClusterPacketCache",
+    "ConfigureServerService",
+];
+
+/// Whether `game:GetService` / `FindService` hides `service_name` (answers nil) in this run context.
+fn hidden_service(engine: &Engine, service_name: &str) -> bool {
+    if ROBLOX_ONLY_SERVICES.contains(&service_name) {
+        return true;
+    }
+    if engine.options.edit_mode() {
+        return false;
+    }
+    if PLUGIN_ONLY_SERVICES.contains(&service_name) {
+        return true;
+    }
+    if engine.options.server() {
+        SERVER_HIDDEN_SERVICES.contains(&service_name)
+    } else {
+        CLIENT_HIDDEN_SERVICES.contains(&service_name)
+    }
+}
+
+/// Capability error `game:GetService` raises for a network peer service of the other side in play mode
+/// (Roblox Studio 0.748.0.7481526, validator/probe/expected; Studio 0.747, tools/parity/expected/server/core_services.txt).
+fn refused_service(engine: &Engine, service_name: &str) -> Option<&'static str> {
+    if engine.options.edit_mode() {
+        return None;
+    }
+    match service_name {
+        "NetworkClient" if engine.options.server() => Some("The current thread cannot create 'NetworkClient' (lacking capability Plugin)"),
+        "NetworkServer" if !engine.options.server() => Some("The current thread cannot create 'NetworkServer' (lacking capability RobloxEngine)"),
+        _ => None,
+    }
+}
 
 /// GetService: the existing service child, or a new one (named, parented without events and
 /// parent-locked).
@@ -456,6 +523,17 @@ pub fn get_service(engine: &Engine, game: InstanceId, service_name: &str) -> Res
     }
     state.dom.attach(service, game);
     state.dom.at_mut(service).set_flag(flags::PARENT_LOCKED, true);
+    // CoreGuiConfiguration creates its configuration children when the service itself is instantiated
+    // (Roblox Studio 0.748.0.7481526, validator/probe/expected: BaseCoreGuiConfiguration is none before
+    // GetService("CoreGuiConfiguration"), and PlayerListConfiguration / SelfViewConfiguration exist after).
+    if service_name == "CoreGuiConfiguration" && !state.edit_mode {
+        for child_name in ["PlayerListConfiguration", "SelfViewConfiguration"] {
+            if let Some(child_class) = reflection.class_id(child_name) {
+                let child = core::create_named(&mut state, reflection, child_class, child_name);
+                state.dom.attach(child, service);
+            }
+        }
+    }
     Ok(service)
 }
 
@@ -610,8 +688,11 @@ fn install_data_model(behaviors: &mut Behaviors, reflection: &Reflection, option
             if known && !names_service(engine, &service_name) {
                 return Ok(values([LuaValue::Nil]));
             }
-            if ROBLOX_ONLY_SERVICES.contains(&&*service_name) {
+            if hidden_service(engine, &service_name) {
                 return Ok(values([LuaValue::Nil]));
+            }
+            if let Some(message) = refused_service(engine, &service_name) {
+                return raise(message);
             }
             // (the settings services belong to settings() and UserSettings(): settings.rs)
             if let Some(answer) = settings::data_model_service(engine, id, &service_name) {
@@ -628,11 +709,14 @@ fn install_data_model(behaviors: &mut Behaviors, reflection: &Reflection, option
             if known && !names_service(engine, &service_name) {
                 return Ok(values([LuaValue::Nil]));
             }
+            if hidden_service(engine, &service_name) || refused_service(engine, &service_name).is_some() {
+                return Ok(values([LuaValue::Nil]));
+            }
             // (a name that is no service's raises as GetService does: tools/parity/probes/core_services.luau)
             if !names_service(engine, &service_name) && !settings::found_nowhere(&service_name) {
                 return raise(format!("'{service_name}' is not a valid Service name"));
             }
-            Ok(values([match find_service(engine, id, &service_name).filter(|_| !ROBLOX_ONLY_SERVICES.contains(&&*service_name)) {
+            Ok(values([match find_service(engine, id, &service_name) {
                 Some(service) => instance_value(lua, engine, service)?,
                 None => LuaValue::Nil,
             }]))

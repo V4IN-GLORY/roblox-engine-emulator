@@ -856,6 +856,8 @@ pub struct State {
     pub quiet_write: bool,
     /// Number of instances that have ever created an AncestryChanged signal (instance::event_signal)
     pub ancestry_signals: u32,
+    /// Whether this engine runs in edit mode (plugin capability for Instance.new capability checks)
+    pub edit_mode: bool,
 }
 
 /// Rust-side hooks (the Luau runtime's InstanceModule.Hooks that engine subsystems install).
@@ -969,6 +971,7 @@ impl Engine {
                 loopback_log: None,
                 quiet_write: false,
                 ancestry_signals: 0,
+                edit_mode: options.edit_mode(),
             }),
             options,
             lua: RefCell::new(lua::LuaRefs::default()),

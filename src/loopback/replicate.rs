@@ -335,11 +335,17 @@ pub fn join(server_lua: &Lua, server: &Rc<Engine>, client_lua: &Lua, client: &Rc
             }
             let instance = server_state.dom.at(node);
             let (class, parent_of_node) = (instance.class, instance.parent);
-            // the loopback player is the client's local one; its containers the client's of their class
+            // the loopback player is the client's local one; its containers and default service singletons
+            // (Workspace.Terrain, TextChatService's configuration children) pair with the client's of their class
             let paired = if node == server_player {
                 Some(client_player)
             } else if parent_of_node == Some(server_player) {
                 client_state.dom.at(client_player).children.iter().copied().find(|&child| client_state.dom.at(child).class == class && ids.to_server.get(child).is_none())
+            } else if parent_of_node == Some(service)
+                && (instance.flags & flags::SCRIPT_CREATED == 0)
+                && (reflection.is_a(class, "Terrain") || reflection.is_a(class, "TextChatConfigurations"))
+            {
+                client_state.dom.at(parent).children.iter().copied().find(|&child| client_state.dom.at(child).class == class && ids.to_server.get(child).is_none())
             } else {
                 None
             };
