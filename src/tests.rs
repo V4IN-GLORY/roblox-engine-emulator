@@ -12326,9 +12326,9 @@ fn editable_image_refuses_the_blends_studio_does_not_play_yet() {
 /// values, the engine's own reads), and a game script may neither read nor write them (a playing client, Studio 0.746:
 /// tools/parity/probes/api_747.luau).
 #[test]
-fn settings_the_0_747_dump_leaves_out_are_still_stored() {
+fn settings_the_dump_leaves_out_are_still_stored() {
     let reflection = crate::Reflection::shared().unwrap();
-    assert_eq!(reflection.version, "0.747.0.7471481");
+    assert_eq!(reflection.version, "0.748.0.7481526");
     for (class, name) in [
         ("Workspace", "StreamingMinRadius"),
         ("Workspace", "StreamingTargetRadius"),

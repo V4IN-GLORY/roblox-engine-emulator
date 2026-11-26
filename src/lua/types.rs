@@ -506,10 +506,7 @@ fn register_user(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
                 b"Id" => return Ok(values([LuaValue::Number(user.id as f64)])),
                 b"DomainId" => return Ok(values([LuaValue::Number(user.domain_id as f64)])),
                 b"DomainType" => {
-                    // 0.748 uses Experience/Group/OAuth while the 0.747 dump still has EXPERIENCE/OAUTH
-                    let name = user.domain_type.to_str_lossy();
-                    let item = e.reflection.enum_item("DomainType", &name).or_else(|| e.reflection.enum_item("DomainType", &name.to_ascii_uppercase()));
-                    return Ok(values([match item {
+                    return Ok(values([match e.reflection.enum_item("DomainType", &user.domain_type.to_str_lossy()) {
                         Some(item) => enum_item_value(lua, &e, item)?,
                         None => LuaValue::Nil,
                     }]));

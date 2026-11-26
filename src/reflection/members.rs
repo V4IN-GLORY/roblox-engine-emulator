@@ -2678,7 +2678,7 @@ mod tests {
         assert_eq!(legacy, ["GothamSemibold", "MontserratMedium"]);
         assert!(reflection.enum_items_of(font.id).all(|item| reflection.legacy_names(item.id).all(|name| name != &*item.name)));
         assert!(reflection.enum_items_of(font.id).any(|item| item.id == medium));
-        assert_eq!(reflection.all_enums().count(), 662);
+        assert_eq!(reflection.all_enums().count(), 664);
         for (index, item) in reflection.enum_items.iter().enumerate() {
             assert_eq!(item.id as usize, index);
             for legacy in reflection.legacy_names(item.id) {
