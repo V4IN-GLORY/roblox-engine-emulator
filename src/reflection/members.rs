@@ -8,7 +8,7 @@
 use std::{borrow::Cow, fmt, marker::PhantomData, ptr};
 
 use rbx_dom_weak::types::{self as dom, Variant};
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 use serde::de::{self, Deserialize, Deserializer, IgnoredAny, MapAccess, SeqAccess, Visitor};
 
 use super::{
@@ -188,17 +188,24 @@ pub struct ParameterInfo {
     /// Its `DefaultValue`, encoded as the dump encodes defaults (docs/engine.md "Data files"): a JSON number, string or
     /// boolean, or an object whose `$t` names the type (`{"$t": "EnumItem", "e": "OutfitType", "n": "All"}`, `{"$t":
     /// "Vector3", "v": [0, 0, 0]}`; a table's items under `v`, a datatype ree has no encoding for as `tostring` writes it
-    /// under `s`). `None` where ReflectionService gives none, which does not make the parameter required: the dump does not
-    /// say which are optional (WaitForChild's timeOut has no default). [`Reflection::parameter_default`] decodes it.
+    /// under `s`). `None` where ReflectionService gives none; see [`Self::optional`] for whether the parameter takes `nil`.
+    /// [`Reflection::parameter_default`] decodes it.
     pub default: Option<serde_json::Value>,
+    /// Whether the parameter takes `nil` or may be omitted: `true` when the dump gives it a default or a `?` script type, or
+    /// Roblox's Creator Docs mark it optional (`data/optional-parameters.json`).
+    pub optional: bool,
 }
 
 impl ParameterInfo {
-    fn from_json(value: &serde_json::Value) -> ParameterInfo {
+    fn from_json(value: &serde_json::Value, extra_optional: bool) -> ParameterInfo {
+        let type_info = TypeInfo::from_json(value.get("type"));
+        let default = value.get("default").cloned();
+        let optional = extra_optional || default.is_some() || type_info.script.ends_with('?');
         ParameterInfo {
             name: text(value.get("name")).unwrap_or("").into(),
-            type_info: TypeInfo::from_json(value.get("type")),
-            default: value.get("default").cloned(),
+            type_info,
+            default,
+            optional,
         }
     }
 
@@ -548,6 +555,17 @@ fn by_name(list: Option<&serde_json::Value>) -> FxHashMap<&str, &serde_json::Val
     found
 }
 
+#[derive(serde::Deserialize)]
+struct OptionalParametersFile {
+    parameters: Vec<(String, String, usize)>,
+}
+
+fn optional_parameters() -> FxHashSet<(String, String, usize)> {
+    serde_json::from_slice::<OptionalParametersFile>(crate::data::OPTIONAL_PARAMETERS)
+        .map(|file| file.parameters.into_iter().collect())
+        .unwrap_or_default()
+}
+
 impl Members {
     /// The members of every class of `reflection`, from the dump it was read from: its own lists give each class's
     /// members and order (then the methods and properties it has only through behaviours), the dump's entry the rest (an
@@ -556,11 +574,21 @@ impl Members {
     pub(super) fn build(reflection: &Reflection, dump: &[u8]) -> Members {
         let classes = serde_json::from_slice::<MemberDump>(dump).map(|dump| dump.classes).unwrap_or_default();
         let entries: Vec<&MemberClass> = classes.iter().filter(|class| text(class.name.as_ref()).is_some()).collect();
+        let extra_optional = optional_parameters();
         let mut members = Members::default();
         for class in &reflection.classes {
             let entry = if class.reflected { entries.get(class.id as usize).copied() } else { None };
-            let parameters = |member: Option<&serde_json::Value>| -> Box<[ParameterInfo]> {
-                list(member.and_then(|member| member.get("parameters"))).iter().map(ParameterInfo::from_json).collect()
+            let parameters = |member: Option<&serde_json::Value>, method_name: Option<&str>| -> Box<[ParameterInfo]> {
+                list(member.and_then(|member| member.get("parameters")))
+                    .iter()
+                    .enumerate()
+                    .map(|(index, param)| {
+                        let extra = method_name.is_some_and(|method| {
+                            extra_optional.contains(&(class.name.to_string(), method.to_string(), index + 1))
+                        });
+                        ParameterInfo::from_json(param, extra)
+                    })
+                    .collect()
             };
             let permits = |member: Option<&serde_json::Value>| Permits::from_json(member.and_then(|member| member.get("permits")));
             let display = |member: Option<&serde_json::Value>| display_from_json(member.and_then(|member| member.get("display")));
@@ -576,12 +604,13 @@ impl Members {
                 .filter_map(|name| reflection.name_id(name))
                 .filter(|name| !class.own_methods.contains(name));
             for name in class.own_methods.iter().copied().chain(behaviour_methods) {
-                let member = dumped.get(reflection.name(name)).copied();
+                let method_name = reflection.name(name);
+                let member = dumped.get(method_name).copied();
                 members.declared[METHODS].entry((class.id, name)).or_insert(members.methods.len() as u32);
                 members.methods.push(MethodInfo {
                     name,
                     owner: class.id,
-                    parameters: parameters(member),
+                    parameters: parameters(member, Some(method_name)),
                     returns: member.map(|member| TypeInfo::from_json(member.get("returns"))),
                     permits: permits(member),
                     display: display(member),
@@ -598,7 +627,7 @@ impl Members {
                 members.events.push(EventInfo {
                     name,
                     owner: class.id,
-                    parameters: parameters(member),
+                    parameters: parameters(member, None),
                     permits: permits(member),
                     display: display(member),
                     origin: origin(member),
@@ -614,7 +643,7 @@ impl Members {
                 members.callbacks.push(CallbackInfo {
                     name,
                     owner: class.id,
-                    parameters: parameters(member),
+                    parameters: parameters(member, None),
                     returns: member.map(|member| TypeInfo::from_json(member.get("returns"))),
                     permits: permits(member),
                     display: display(member),
@@ -2737,6 +2766,12 @@ mod tests {
             assert_eq!(read.own_events(class.id), reflection.own_events(class.id));
             assert_eq!(read.own_callbacks(class.id), reflection.own_callbacks(class.id));
         }
+        // optional flag merges the dump's defaults/`?` types with Creator Docs' optional-parameters.json
+        let method = |class: &str, name: &str| reflection.class_method(reflection.class_id(class).unwrap(), reflection.name_id(name).unwrap()).unwrap();
+        assert!(method("BasePart", "SetNetworkOwner").parameters[0].optional);
+        assert!(method("AudioPlayer", "Play").parameters[0].optional);
+        assert!(method("Instance", "FindFirstChild").parameters[1].optional);
+        assert!(!method("Humanoid", "ReplaceBodyPartR15").parameters[1].optional);
     }
 
     /// A class entry as a test compares the readers: its name, its events', methods' and callbacks' names, and the rest.

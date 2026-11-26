@@ -105,9 +105,12 @@ pub use reflection::{ClassId, K, NameId, Reflection};
 pub use value::{Str, Value};
 
 /// The engine's data, compiled in: Studio's ReflectionService dump (`data/reflection.json`,
-/// tools/dump-reflection.luau writes it) and the Enum.Font faces (`data/font-enums.json`).
+/// tools/dump-reflection.luau writes it), Creator Docs optional method parameters
+/// (`data/optional-parameters.json`, tools/optional-parameters.mjs writes it) and the Enum.Font
+/// faces (`data/font-enums.json`).
 pub mod data {
     pub const REFLECTION: &[u8] = include_bytes!("../data/reflection.json");
+    pub const OPTIONAL_PARAMETERS: &[u8] = include_bytes!("../data/optional-parameters.json");
     pub const FONT_ENUMS: &[u8] = include_bytes!("../data/font-enums.json");
 }
 

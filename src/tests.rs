@@ -975,6 +975,39 @@ fn methods_check_their_arguments_as_a_clients_reflection_casts_them() {
     );
 }
 
+/// Optional parameters from Roblox's Creator Docs (`data/optional-parameters.json`) allow `nil` / omission even when
+/// ReflectionService leaves them unmarked (`BasePart:SetNetworkOwner(nil)`, `AudioPlayer:Play()`), while required later
+/// `Instance` parameters still raise `Argument N missing or nil` (`Humanoid:ReplaceBodyPartR15()`, measured in Studio 0.748,
+/// `validator/probe/expected/surface_server.txt`).
+#[test]
+fn optional_parameters_from_docs_accept_nil_and_required_later_instances_raise() {
+    let (lua, engine) = start();
+    run(
+        &lua,
+        &engine,
+        r#"
+        local function Try(F, ...) local Ok, Message = pcall(F, ...) return if Ok then "ok" else tostring(Message) end
+        local Part = Instance.new("Part")
+        local AudioPlayer = Instance.new("AudioPlayer")
+        local Humanoid = Instance.new("Humanoid")
+        print(Try(function() Part:SetNetworkOwner(nil) end), Try(function() Part:SetNetworkOwner() end))
+        print(Try(function() AudioPlayer:Play() end), Try(function() AudioPlayer:Play(nil) end))
+        print(Try(function() Humanoid:MoveTo(Vector3.zero) end))
+        print(Try(function() Humanoid:ReplaceBodyPartR15() end), Try(function() Humanoid:ReplaceBodyPartR15(Enum.BodyPartR15.Head) end))
+        "#,
+    );
+    let prints: Vec<String> = lines(&engine).into_iter().filter(|line| line.starts_with("print: ")).collect();
+    assert_eq!(
+        prints,
+        vec![
+            "print: ok ok",
+            "print: ok ok",
+            "print: ok",
+            "print: Argument 2 missing or nil Argument 2 missing or nil",
+        ]
+    );
+}
+
 /// An Object parameter given a value that is not an Instance, as a playing client casts it (Studio 0.748, a client and a
 /// server alike: tools/parity/probes/object_parameter_casts.luau): Instance.new's parent raises Luau's argument error naming the
 /// value's typeof, at the calling line, after the class name's check; IsDescendantOf and IsAncestorOf take nil, a thread, an

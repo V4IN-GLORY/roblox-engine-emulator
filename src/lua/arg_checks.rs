@@ -52,9 +52,11 @@ enum Expect {
 struct Param {
     expect: Expect,
     nil_ok: bool,
-    /// Whether ree's 0.747 dump is trusted to mark this kind of parameter optional (it never lost an enum's, a bool's, a User's or
-    /// most datatypes' default against Roblox's 0.748 dump, but lost 95 of number, string, Instance, table, function and CFrame
-    /// parameters): a Rust behaviour's plan raises a missing one only then
+    /// Whether a Rust behaviour's plan raises "Argument N missing or nil" for this parameter kind before the behaviour runs
+    /// (enum, bool, User, Content, Buffer, and datatypes other than CFrame). Other kinds (`string`, numbers, `Instance`,
+    /// tables, functions, `CoordinateFrame`) leave a nil to the Rust behaviour, which implements Roblox's measured wording,
+    /// order, or nil acceptance (e.g. `Translator:Translate`, `LocalizationService:GetTranslatorForPlayer`, `CollectionService`,
+    /// `Debris:AddItem`, `Instance:QueryDescendants`, `ReflectionService:GetClass`, `WorldRoot:GetPartBoundsIn*`).
     nil_mark_trusted: bool,
     /// The type a refusal names ("Unable to cast string to <target>")
     target: Box<str>,
@@ -68,8 +70,8 @@ pub struct ArgPlan {
     /// The class that declares the method: a call whose self is another class's instance raises the method's self error first
     declaring: ClassId,
     params: Box<[Param]>,
-    /// Whether a nil raises "Argument N missing or nil" here; a Rust behaviour's plan leaves a nil, and every check before it,
-    /// to the behaviour
+    /// Whether a nil raises "Argument N missing or nil" here for every required parameter; a Rust behaviour's plan leaves a
+    /// nil of a `!nil_mark_trusted` kind, and every check before it, to the behaviour
     checks_missing: bool,
     /// The unemulated method this is the stand-in's plan of, as Output names it (class, member): a call it refuses is still a
     /// call of a member ree does not emulate, so the refusal records it first
@@ -89,9 +91,8 @@ pub fn stand_in_plan(engine: &Engine, class: ClassId, name: NameId) -> Option<&'
     build(engine, class, name, true, true)
 }
 
-/// [`plan`] for a Rust behaviour: the casts of the values given, from the last back to a nil of a kind whose optional mark ree's
-/// dump may have lost (Param::nil_mark_trusted), which the behaviour takes or refuses itself (`Shapecast`'s `cframeOverride`, a
-/// `CFrame?` in 0.748's dump), or to an instance list, whose words are its own.
+/// [`plan`] for a Rust behaviour: the casts of the values given, from the last back to a nil of a kind left to the behaviour
+/// (`!Param::nil_mark_trusted`), or to an instance list, whose words are its own.
 pub fn cast_plan(engine: &Engine, class: ClassId, name: NameId) -> Option<&'static ArgPlan> {
     build(engine, class, name, false, false)
 }
@@ -105,7 +106,7 @@ fn build(engine: &Engine, class: ClassId, name: NameId, checks_missing: bool, st
     if method.origin != MemberOrigin::Dump || method.parameters.is_empty() || !method.permits.allows("Call") {
         return None;
     }
-    let params: Box<[Param]> = method.parameters.iter().enumerate().map(|(position, info)| param(reflection, position, info)).collect();
+    let params: Box<[Param]> = method.parameters.iter().map(|info| param(reflection, info)).collect();
     if params.iter().all(|param| param.expect == Expect::Any && (param.nil_ok || !(checks_missing || param.nil_mark_trusted))) {
         return None;
     }
@@ -113,7 +114,7 @@ fn build(engine: &Engine, class: ClassId, name: NameId, checks_missing: bool, st
     Some(intern(ArgPlan { declaring: reflection.declaring_class(class, name), params, checks_missing, stand_in }))
 }
 
-fn param(reflection: &Reflection, position: usize, info: &ParameterInfo) -> Param {
+fn param(reflection: &Reflection, info: &ParameterInfo) -> Param {
     let engine_type = &*info.type_info.engine;
     let enum_type = info.type_info.enum_name.as_deref().and_then(|enum_name| Some((reflection.enum_id(enum_name)?, enum_name)));
     let (expect, target) = match engine_type {
@@ -134,11 +135,7 @@ fn param(reflection: &Reflection, position: usize, info: &ParameterInfo) -> Para
         datatype => (Expect::Datatype, datatype),
     };
     let script = &*info.type_info.script;
-    // (Roblox's 0.748 dump marks every parameter the capture lets take nil with a default or a `?` type, but ree's 0.747 dump lost
-    // most `nil` defaults of instance, options-table and callback parameters, so a later one of those takes nil: a valid call
-    // never raises, at the price of some missed misuse, a later function's above all)
-    let later_optional_kind = position > 0 && matches!(engine_type, "Instance" | "ValueTable" | "WeakFunctionRef");
-    let nil_ok = info.default.is_some() || script.ends_with('?') || matches!(engine_type, "Variant" | "Tuple") || later_optional_kind;
+    let nil_ok = info.optional || matches!(engine_type, "Variant" | "Tuple");
     let nil_mark_trusted = !matches!(
         engine_type,
         "string" | "int" | "int64" | "float" | "double" | "Instance" | "Object" | "ValueTable" | "ValueArray" | "WeakFunctionRef" | "CoordinateFrame"
