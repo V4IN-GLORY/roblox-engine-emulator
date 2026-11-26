@@ -733,7 +733,8 @@ fn a_server_makes_r6_rigs_raises_on_load_asset_and_loads_no_character() {
     assert!(has(&lines, "print: rig Head,Humanoid,HumanoidRootPart,Left Arm,Left Leg,Right Arm,Right Leg,Torso HumanoidRootPart R6"), "{lines:?}");
     assert!(has(&lines, "print: neck Torso Head Torso 5"), "{lines:?}");
     assert!(has(&lines, "print: r15 1 true"), "{lines:?}");
-    assert!(has_error(&lines, "cast false", "Unable to cast number to HumanoidDescription"), "{lines:?}");
+    // (an Instance parameter given another value: arg_checks, as every one in the Studio 0.748 capture, validator/probe/expected)
+    assert!(has_error(&lines, "cast false", "Unable to cast value to Object"), "{lines:?}");
     assert!(has(&lines, "print: load false InsertService:LoadAsset: asset 123 cannot be loaded offline true"), "{lines:?}");
     assert!(has(&lines, "print: version false InsertService:LoadAssetVersion: asset version 456 cannot be loaded offline true"), "{lines:?}");
     assert!(has(&lines, "print: async false AssetService:LoadAssetAsync: asset 789 cannot be loaded offline true"), "{lines:?}");

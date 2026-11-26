@@ -168,11 +168,18 @@ struct Member {
     index_fn: c_int,
     /// Slot of the function a method call runs (0: not yet made)
     call_fn: c_int,
+    /// A Rust behaviour's argument checks, run before the call (a Luau behaviour's and the stand-in's are their C function's own)
+    call_checks: Option<&'static super::arg_checks::ArgPlan>,
     /// What a call of it costs Studio (crate::cost), charged to the work clock
     cost: f32,
     /// The name its value is kept under: the key's own, or for a deprecated lower-case property the property it
     /// stands for (`brickColor` -> BrickColor, Engine::member_name)
     name: NameId,
+}
+
+/// Whether `name` is an Instance method raw.rs runs inline, with its own measured checks.
+pub(crate) fn is_inline_method(name: NameId) -> bool {
+    base_method(name).is_some()
 }
 
 fn base_method(name: NameId) -> Option<Base> {
@@ -208,7 +215,7 @@ fn compute_member(engine: &Engine, class: ClassId, key: NameId) -> Member {
     let base_class = reflection.class_id("Instance").expect("Instance class");
     // (a deprecated lower-case property is the property it stands for: its value, setter and Changed)
     let name = engine.member_name(class, key);
-    let mut member = Member { read: Read::Slow, write: Write::Slow, call: Call::NotMethod, index_fn: 0, call_fn: 0, cost: crate::cost::method(reflection.name(name)) as f32, name };
+    let mut member = Member { read: Read::Slow, write: Write::Slow, call: Call::NotMethod, index_fn: 0, call_fn: 0, call_checks: None, cost: crate::cost::method(reflection.name(name)) as f32, name };
     match engine.resolve_member(class, name) {
         Resolved::Property { property, getter, setter } => {
             let behaviors = engine.behaviors.borrow();
@@ -358,6 +365,7 @@ const EMPTY_MEMBER: Member = Member {
     call: Call::NotMethod,
     index_fn: 0,
     call_fn: 0,
+    call_checks: None,
     cost: 0.0,
     name: 0,
 };
@@ -678,14 +686,16 @@ pub fn install(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
         let Some(name) = e.reflection.name_id_bytes(&key.as_bytes()) else { return Ok(LuaValue::Nil) };
         let class = e.state.borrow().dom.at(id).class;
         let function = linstance::call_function(lua, &e, class, name)?;
-        if let (Some(function), Some(api)) = (&function, api(&e)) {
+        let Some((function, checks)) = function else { return Ok(LuaValue::Nil) };
+        if let Some(api) = api(&e) {
             let slot = api.next_function_slot();
             api.functions.raw_set(slot, function.clone())?;
             let mut member = api.member(class, name);
             member.call_fn = slot;
+            member.call_checks = checks;
             api.set_member(class, name, member);
         }
-        Ok(function.map_or(LuaValue::Nil, LuaValue::Function))
+        Ok(LuaValue::Function(function))
     })?;
     let refs = Refs {
         instances: instances_ref,
@@ -981,6 +991,25 @@ unsafe fn this<'a>(state: *mut ffi::lua_State) -> Option<(&'a Api, InstanceId)> 
 /// The instance the stack value at `index` is, if any.
 pub(crate) unsafe fn stack_instance(state: *mut ffi::lua_State, index: c_int) -> Option<InstanceId> {
     unsafe { arg_instance(state, index) }
+}
+
+/// The enum item the stack value at `index` (an absolute index) is, if any, looked up in the registry of the API the instance at
+/// `owner` belongs to; allocates nothing.
+pub(crate) unsafe fn stack_enum_item(state: *mut ffi::lua_State, owner: c_int, index: c_int) -> Option<crate::reflection::EnumItemId> {
+    unsafe {
+        let payload = ffi::lua_touserdatatagged(state, owner, INSTANCE_TAG) as *const Payload;
+        if payload.is_null() {
+            return None;
+        }
+        let api = &*(*payload).api;
+        ffi::lua_rawcheckstack(state, 2);
+        ffi::lua_rawgeti_(state, REGISTRY, api.refs.enum_ids);
+        ffi::lua_pushvalue(state, index);
+        let found = ffi::lua_rawget(state, -2) == ffi::LUA_TNUMBER;
+        let item = ffi::lua_tonumberx(state, -1, std::ptr::null_mut()) as crate::reflection::EnumItemId;
+        ffi::lua_pop(state, 2);
+        found.then_some(item)
+    }
 }
 
 unsafe fn arg_instance(state: *mut ffi::lua_State, index: c_int) -> Option<InstanceId> {
@@ -1307,7 +1336,7 @@ unsafe fn index_fast(state: *mut ffi::lua_State) -> Out {
         let mut name = name;
         let mut read = match name {
             Some(name) => api.member(class, name),
-            None => Member { read: Read::Child, write: Write::Slow, call: Call::NotMethod, index_fn: 0, call_fn: 0, cost: 0.0, name: 0 },
+            None => Member { read: Read::Child, write: Write::Slow, call: Call::NotMethod, index_fn: 0, call_fn: 0, call_checks: None, cost: 0.0, name: 0 },
         };
         // A key that names no member and no child reads the member it names with its first letter upper-cased
         // (`part.anchored`, instance.rs `get`): only after the child lookup has missed, so exact names never pay for it
@@ -1636,9 +1665,9 @@ unsafe fn namecall_general(state: *mut ffi::lua_State) -> c_int {
         }
         // (the method namecall_fast found: by the key, or by the key with its first letter upper-cased)
         let class = api.engine().state.borrow().dom.at(id).class;
-        let (name, slot) = match method_member(api, class, key, name_of(api, key, atom)) {
-            Some((name, member, _)) => (Some(name), member.call_fn),
-            None => (None, 0),
+        let (name, slot, checks) = match method_member(api, class, key, name_of(api, key, atom)) {
+            Some((name, member, _)) => (Some(name), member.call_fn, member.call_checks),
+            None => (None, 0, None),
         };
         if slot != 0 {
             ffi::lua_rawgeti_(state, REGISTRY, api.refs.functions);
@@ -1658,6 +1687,13 @@ unsafe fn namecall_general(state: *mut ffi::lua_State) -> c_int {
             }
         }
         ffi::lua_insert(state, 1);
+        // (made by resolve_call just now: its checks are the member's now)
+        let checks = if slot == 0 { name.and_then(|name| api.member(class, name).call_checks) } else { checks };
+        if let Some(checks) = checks
+            && let Err(message) = super::arg_checks::check(state, checks, 2)
+        {
+            raise(state, message, 0)
+        }
         let count = ffi::lua_gettop(state) - 1;
         ffi::lua_call(state, count, ffi::LUA_MULTRET);
         if ffi::lua_status(state) != ffi::LUA_OK {

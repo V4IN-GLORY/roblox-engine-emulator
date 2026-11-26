@@ -669,6 +669,11 @@ pub const CAPABILITY_CALLS: &[(&str, &str, &str)] = &[
     ("Selection", "AddFocusCallback", "RobloxScript"),
     ("Selection", "ClearTerrainSelectionHack", "RobloxScript"),
     ("Selection", "SetTerrainSelectionHack", "RobloxScript"),
+    // (a playing client and its server, Studio 0.748, with no arguments and with a wrong one: validator/probe/expected; the dump
+    // permits none of them a Call)
+    ("ScriptContext", "EnableCoverage", "PluginOrOpenCloud"),
+    ("Stats", "SetHarmonyMemoryTarget", "InternalTest"),
+    ("UniqueIdLookupService", "GetOrCreateUniqueIdRemoteCommand", "RemoteCommand"),
 ];
 
 // Callbacks the dump leaves out (it lists none for any class): every callback Roblox's API dump lets

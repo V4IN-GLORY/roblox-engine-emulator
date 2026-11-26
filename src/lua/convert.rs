@@ -18,6 +18,37 @@ use crate::{
     value::{ContentValue, Str, Value},
 };
 
+/// What a value is called in a cast error ("Unable to cast X to Y"), as a client names it: a number "double", a boolean "bool", a
+/// table "Array" (empty or with an array part) or "Dictionary", an Instance "Instance", an EnumItem its enum ("Unable to cast
+/// KeyCode to float"), a CFrame "CoordinateFrame", a function "Function", an RBXScriptSignal "EventInstance", an Enum, Enums,
+/// RotationCurveKey, thread or plain userdata "null", any other value its typeof. Measured on a playing client and its server
+/// (Studio 0.748), the same in each of the Camera's casts (to float, int, Vector3, CoordinateFrame, CameraPanMode and Array) and
+/// in BulkMoveTo's; EncodingService's casts to HashAlgorithm name values the same way (0.747), FloatCurve:InsertKey's a
+/// RotationCurveKey "null" (animation/curve_tests.rs).
+pub fn cast_name(engine: &Engine, value: &LuaValue) -> String {
+    match value {
+        LuaValue::Number(_) | LuaValue::Integer(_) => "double".into(),
+        LuaValue::Boolean(_) => "bool".into(),
+        LuaValue::Table(table) => (if table.raw_len() > 0 || table.is_empty() { "Array" } else { "Dictionary" }).into(),
+        LuaValue::Function(_) => "Function".into(),
+        LuaValue::Thread(_) => "null".into(),
+        LuaValue::UserData(ud) if instance_of_ud(ud).is_some() => "Instance".into(),
+        other => {
+            if let LuaValue::UserData(ud) = other
+                && let Ok(item) = ud.borrow::<LEnumItem>()
+            {
+                return engine.reflection.enum_item_type_name(item.0).to_string();
+            }
+            match typeof_value(engine, other).as_str() {
+                "CFrame" => "CoordinateFrame".into(),
+                "RBXScriptSignal" => "EventInstance".into(),
+                "Enum" | "Enums" | "RotationCurveKey" | "userdata" => "null".into(),
+                name => name.into(),
+            }
+        }
+    }
+}
+
 /// An engine value as scripts see it (instances and enum items keep their identity; Font values
 /// are fresh copies, as CopyIfMutable returns).
 pub fn to_lua(lua: &Lua, engine: &Engine, value: &Value) -> LuaResult<LuaValue> {

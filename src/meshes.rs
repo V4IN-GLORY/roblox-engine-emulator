@@ -1420,9 +1420,12 @@ pub fn install(engine: &Rc<Engine>, behaviors: &mut Behaviors) {
         Ok(none())
     }));
 
+    // (each checks its own arguments as a client does, in its own words: "BatchAdd(Enum.MeshAttribute.UV, ...): uvs must be an
+    // array", not the reflection's "Unable to cast double to Array")
     let mut add = |name: &str, f: crate::services::MethodFn| {
         if let (Some(class), Some(name)) = (reflection.class_id("EditableMesh"), reflection.name_id(name)) {
             behaviors.add_method(class, name, f);
+            behaviors.checks_own_arguments(class, name);
         }
     };
 

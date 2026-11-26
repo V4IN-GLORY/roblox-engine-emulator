@@ -604,6 +604,8 @@ pub fn install(engine: &Rc<Engine>) {
     for (member, function) in members {
         if let Some(name) = engine.reflection.name_id(member) {
             behaviors.add_method(names.world_root, name, function);
+            // (their argument errors are their own: the order, the words and what raising costs, measured above)
+            behaviors.checks_own_arguments(names.world_root, name);
         }
     }
 }

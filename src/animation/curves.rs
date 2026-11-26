@@ -57,25 +57,14 @@ use crate::{
     ClassId, Engine, InstanceId, NameId, State,
     instance as core,
     lua::{
-        Args, Flow, convert,
+        Args, Flow,
+        convert::{self, cast_name},
         curve_keys::{self, LFloatCurveKey, LRotationCurveKey},
-        instance_value, raise, typeof_value, values,
+        instance_value, raise, values,
     },
     services::{Behaviors, getter, method},
     value::{Str, Value},
 };
-
-/// A script value's name in "Unable to cast X to Y".
-fn cast_name(engine: &Engine, value: &LuaValue) -> String {
-    match value {
-        LuaValue::Table(table) => if table.raw_len() > 0 || table.is_empty() { "Array" } else { "Dictionary" }.into(),
-        other => match typeof_value(engine, other).as_str() {
-            "number" => "double".into(),
-            "boolean" => "bool".into(),
-            other => other.into(),
-        },
-    }
-}
 
 /// Argument `index` (1 is the first after self) as a number of kind `kind` ("float", "int").
 fn number_arg(lua: &Lua, engine: &Engine, args: &Args, index: usize, kind: &str) -> Result<f64, Flow> {

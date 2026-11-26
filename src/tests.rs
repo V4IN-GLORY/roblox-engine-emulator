@@ -934,6 +934,47 @@ fn an_instance_handle_holds_an_instance_or_none_as_a_client_does() {
     );
 }
 
+/// A reflected method checks its arguments before its behaviour runs, as a client's reflection casts them (Studio 0.748, a playing
+/// client and a server alike: validator/probe/expected, docs/engine.md "Argument casts"): the last bad one first, missing or nil
+/// "Argument N missing or nil", a wrong type "Unable to cast Array to int64", a numeric string taken as a number and an item's
+/// name as the item, and a method a game script may not call its capability error; `obj:Method()` and `obj.Method(obj)` alike,
+/// an unemulated method's and a Rust behaviour's (UserInputService:IsKeyDown) alike. ree ran them, unemulated ones answering
+/// nil, whatever they were given.
+#[test]
+fn methods_check_their_arguments_as_a_clients_reflection_casts_them() {
+    let (lua, engine) = start();
+    run(
+        &lua,
+        &engine,
+        r#"
+        local function Try(F, ...) local Ok, Message = pcall(F, ...) return if Ok then "ok" else tostring(Message) end
+        local Actor = Instance.new("Actor")
+        local AdService = game:GetService("AdService")
+        local UserInputService = game:GetService("UserInputService")
+        print(Try(function() Actor:SendMessage() end), Try(Actor.SendMessage, Actor))
+        print(Try(function() AdService:CreateAdRewardFromDevProductId({}) end), Try(AdService.CreateAdRewardFromDevProductId, AdService, {}))
+        print(Try(function() AdService:CreateAdRewardFromDevProductId("5") end))
+        print(Try(function() UserInputService:SetNavigationGamepad() end), Try(function() workspace:FindPartsInRegion3("x") end))
+        print(Try(function() game:GetService("Stats"):SetHarmonyMemoryTarget(1) end))
+        print(Try(function() UserInputService:IsKeyDown() end), Try(UserInputService.IsKeyDown, UserInputService, "x"), Try(function() UserInputService:IsKeyDown({}) end))
+        print(Try(function() UserInputService:IsKeyDown("A") end), Try(function() UserInputService:IsKeyDown(Enum.KeyCode.A) end), Try(function() UserInputService:IsKeyDown(Enum.UserInputType.Touch) end))
+        "#,
+    );
+    let prints: Vec<String> = lines(&engine).into_iter().filter(|line| line.starts_with("print: ")).collect();
+    assert_eq!(
+        prints,
+        vec![
+            "print: Argument 1 missing or nil Argument 1 missing or nil",
+            "print: Unable to cast Array to int64 Unable to cast Array to int64",
+            "print: ok",
+            "print: Argument 2 missing or nil Unable to cast string to Region3",
+            "print: The current thread cannot call 'SetHarmonyMemoryTarget' (lacking capability InternalTest)",
+            "print: Argument 1 missing or nil Unable to cast string to KeyCode Unable to cast Array to KeyCode",
+            "print: ok ok Unable to cast UserInputType to KeyCode",
+        ]
+    );
+}
+
 /// An Object parameter given a value that is not an Instance, as a playing client casts it (Studio 0.748, a client and a
 /// server alike: tools/parity/probes/object_parameter_casts.luau): Instance.new's parent raises Luau's argument error naming the
 /// value's typeof, at the calling line, after the class name's check; IsDescendantOf and IsAncestorOf take nil, a thread, an

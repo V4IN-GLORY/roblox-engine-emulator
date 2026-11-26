@@ -937,10 +937,6 @@
 			"why": "RemoteFunction:InvokeClient on a client: a client raises (a nil player first, then the refusal); ree's client run does not emulate it and returns nothing"
 		},
 		{
-			"line": "yieldable-InvokeClient-nil",
-			"why": "RemoteFunction:InvokeClient on a client: a client raises (a nil player first, then the refusal); ree's client run does not emulate it and returns nothing"
-		},
-		{
 			"line": "yieldable-PreloadAsync",
 			"why": "ContentProvider:PreloadAsync of a list with nothing to load returns at once in a client; ree waits a frame where the thread can yield (where it cannot, it returns at once, as a client does)"
 		}

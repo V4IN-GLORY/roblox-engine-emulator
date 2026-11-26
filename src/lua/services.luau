@@ -700,7 +700,7 @@ Method("EditableImage", "DrawRectangle", function(Self, Position, Size, Color, T
 	Draw(Self, math.floor(Position.X), math.floor(Position.Y), math.floor(Size.X), math.floor(Size.Y), CombineType, function()
 		return R, G, B, A
 	end)
-end)
+end, true) -- (its own checks: ree's 0.747 dump marks transparency and combineType required, Roblox's 0.748 dump gives them defaults)
 
 Method("EditableImage", "DrawImage", function(Self, Position, Image, CombineType, AlphaBlendType)
 	CheckBlend("DrawImage", CombineType, AlphaBlendType)
@@ -711,7 +711,7 @@ Method("EditableImage", "DrawImage", function(Self, Position, Image, CombineType
 		return buffer.readu8(Source, Offset) / 255, buffer.readu8(Source, Offset + 1) / 255,
 			buffer.readu8(Source, Offset + 2) / 255, buffer.readu8(Source, Offset + 3) / 255
 	end)
-end)
+end, true) -- (its own checks: combineType, as DrawRectangle's)
 -- Whether a Draw call anti-aliases its edges: its AntiAliasing argument, Enabled by default (Roblox's
 -- EditableImage reference gives DrawCircle and DrawLine `antiAliasing: AntiAliasing = Enabled`).
 local function Smooth(AntiAliasing)
@@ -733,7 +733,7 @@ Method("EditableImage", "DrawCircle", function(Self, Center, Radius, Color, Tran
 		end
 		return R, G, B, A * Cover
 	end)
-end)
+end, true) -- (its own checks, as DrawRectangle's)
 
 Method("EditableImage", "DrawLine", function(Self, P1, P2, Color, Transparency, CombineType, AntiAliasing, AlphaBlendType)
 	CheckBlend("DrawLine", CombineType, AlphaBlendType)
@@ -755,7 +755,7 @@ Method("EditableImage", "DrawLine", function(Self, P1, P2, Color, Transparency, 
 		end
 		return R, G, B, A * Cover
 	end)
-end)
+end, true) -- (its own checks, as DrawRectangle's)
 
 -- DrawImageTransformed(position, scale, rotation, image, options): the image scaled, turned by `rotation`
 -- degrees about its PivotPoint (default its centre) and placed with that pivot at `position`, sampled
@@ -843,7 +843,7 @@ local function CreateEditableImage(_, Settings)
 	RawSet(Image, "Size", Size, true)
 	return Image
 end
-Method("AssetService", "CreateEditableImage", CreateEditableImage)
+Method("AssetService", "CreateEditableImage", CreateEditableImage, true) -- (its own checks: its options are optional, a `Dictionary?` in Roblox's 0.748 dump)
 Method("AssetService", "CreateEditableImageAsync", function(Self, Source, Settings)
 	local Uri = if typeof(Source) == "Content" and Source.SourceType == Enum.ContentSourceType.Uri
 		then Source.Uri
@@ -1190,7 +1190,7 @@ Method("SharedTableRegistry", "SetSharedTable", function(_, Name, Value)
 	end
 	MarkSharedTable(Value)
 	SharedTables[RegistryName(Name)] = Value
-end)
+end, true) -- (its own checks: the value's cast before the name's, measured above)
 
 -- (CollectionService:GetAllTags is Rust: services/mod.rs)
 
@@ -1507,12 +1507,12 @@ for Member, Kind in { Output = "print", Info = "info", Warn = "warn" } do
 	Method("LogService", Member, Priced(function(Self, Message, Context)
 		LogSelf(Self, Member)
 		LogLine(Kind, Message, Context, 2)
-	end))
+	end), true) -- (its own checks: an argument's place counts the service, measured)
 end
 Method("LogService", "Error", Priced(function(Self, Message, Context)
 	LogSelf(Self, "Error")
 	LogError(Message, Context, 2)
-end))
+end), true)
 -- Log(messageType, message, context): an EnumItem of MessageType, its name or its value (measured: "MessageInfo" and 1 are
 -- MessageInfo; another enum's item "Unable to cast Material to MessageType", 7 "Unable to cast double to MessageType")
 local LogKinds = { MessageOutput = "print", MessageInfo = "info", MessageWarning = "warn", MessageError = "error" }
@@ -1537,7 +1537,7 @@ Method("LogService", "Log", Priced(function(Self, MessageType, Message, Context)
 		LogError(Message, Context, 3)
 	end
 	LogLine(LogKinds[Item.Name], Message, Context, 3)
-end))
+end), true)
 
 -- A BindableFunction's callback, as a client runs it: on a thread of its own (coroutine.running() in it is not the caller's),
 -- handing its outcome to Finished as xpcall packs it. An error it raises before it first yields is also logged as an uncaught

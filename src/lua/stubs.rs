@@ -133,11 +133,16 @@ pub fn load(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
     let e = engine.clone();
     r.set(
         "Method",
-        super::lua_fn(lua, move |_, (class_name, name, function): (String, String, LuaFunction)| {
+        // (a fourth argument, true: the method checks its own arguments, as measured for it, so arg_checks leaves them to it)
+        super::lua_fn(lua, move |_, (class_name, name, function, own_checks): (String, String, LuaFunction, Option<bool>)| {
             let (Some(class), Some(name)) = (e.reflection.class_id(&class_name), e.reflection.name_id(&name)) else {
                 return Ok(());
             };
-            e.behaviors.borrow_mut().add_lua_method(class, name, function);
+            let mut behaviors = e.behaviors.borrow_mut();
+            behaviors.add_lua_method(class, name, function);
+            if own_checks == Some(true) {
+                behaviors.checks_own_arguments(class, name);
+            }
             Ok(())
         })?,
     )?;

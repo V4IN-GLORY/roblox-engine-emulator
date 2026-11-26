@@ -32,6 +32,8 @@ use std::sync::{Mutex, OnceLock};
 
 use mlua::{ffi, prelude::*};
 
+use super::arg_checks::ArgPlan;
+
 /// How a script's call of an engine function is priced (the module's docs).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Kind {
@@ -113,20 +115,30 @@ fn is_trampoline(function: Option<ffi::lua_CFunction>) -> bool {
 
 /// An engine function named `name` doing its work in `body`, an mlua function answering the call protocol (lua/mod.rs `encode`).
 pub fn over_rust(lua: &Lua, name: &str, kind: Kind, body: LuaFunction) -> LuaResult<LuaFunction> {
+    over_rust_checked(lua, name, kind, body, None)
+}
+
+/// [`over_rust`] for a reflected method: with `checks`, a call with an instance for self checks its arguments first.
+pub fn over_rust_checked(lua: &Lua, name: &str, kind: Kind, body: LuaFunction, checks: Option<&'static ArgPlan>) -> LuaResult<LuaFunction> {
     let trampoline = match kind {
         Kind::Library => rust_library as ffi::lua_CFunction,
         Kind::Served => rust_served,
     };
-    closure(lua, name, trampoline, rust_continue, body)
+    closure(lua, name, trampoline, rust_continue, body, checks)
 }
 
 /// An engine function named `name` doing its work in `body` (the engine's own Luau), whose error it raises again as raised.
 pub fn over_luau(lua: &Lua, name: &str, kind: Kind, body: LuaFunction) -> LuaResult<LuaFunction> {
+    over_luau_checked(lua, name, kind, body, None)
+}
+
+/// [`over_luau`] for a reflected method: with `checks`, a call with an instance for self checks its arguments first.
+pub fn over_luau_checked(lua: &Lua, name: &str, kind: Kind, body: LuaFunction, checks: Option<&'static ArgPlan>) -> LuaResult<LuaFunction> {
     let trampoline = match kind {
         Kind::Library => luau_library as ffi::lua_CFunction,
         Kind::Served => luau_served,
     };
-    closure(lua, name, trampoline, luau_continue, body)
+    closure(lua, name, trampoline, luau_continue, body, checks)
 }
 
 /// A raw engine function's body: run in the engine function's own C frame, with the stack of a C function (its arguments), its
@@ -167,14 +179,51 @@ pub fn raw(lua: &Lua, name: &str, kind: Kind, body: RawBody, resume: Option<RawC
     }
 }
 
-fn closure(lua: &Lua, name: &str, trampoline: ffi::lua_CFunction, continuation: ffi::lua_Continuation, body: LuaFunction) -> LuaResult<LuaFunction> {
+fn closure(
+    lua: &Lua,
+    name: &str,
+    trampoline: ffi::lua_CFunction,
+    continuation: ffi::lua_Continuation,
+    body: LuaFunction,
+    checks: Option<&'static ArgPlan>,
+) -> LuaResult<LuaFunction> {
     install();
     let name = interned(name);
-    // SAFETY: the body is pushed as the argument and taken by the closure as its upvalue; the closure is left as the one result
+    // SAFETY: the body is pushed as the argument and taken by the closure as its upvalue, the checks (an interned plan, which
+    // lives for the process) as its second; the closure is left as the one result
     unsafe {
-        lua.exec_raw(body, move |state| {
-            ffi::lua_pushcclosurek(state, trampoline, name, 1, Some(continuation));
+        lua.exec_raw(body, move |state| match checks {
+            Some(checks) => {
+                ffi::lua_rawcheckstack(state, 1);
+                ffi::lua_pushlightuserdata(state, (checks as *const ArgPlan).cast_mut().cast());
+                ffi::lua_pushcclosurek(state, trampoline, name, 2, Some(continuation));
+            }
+            None => ffi::lua_pushcclosurek(state, trampoline, name, 1, Some(continuation)),
         })
+    }
+}
+
+/// A method's argument checks (its closure's second upvalue, absent for other engine functions), before its body runs: the
+/// error raised as the engine's own, without a position. A call whose self is no instance, or another class's, is left to the
+/// body, whose self error comes first.
+#[inline(always)]
+unsafe fn check_arguments(state: *mut ffi::lua_State) {
+    unsafe {
+        let checks = ffi::lua_tolightuserdata(state, ffi::lua_upvalueindex(2)).cast::<ArgPlan>();
+        if checks.is_null() {
+            return;
+        }
+        let Some(id) = super::raw::stack_instance(state, 1) else { return };
+        if !super::arg_checks::takes_self(state, &*checks, id) {
+            return;
+        }
+        if let Err(message) = super::arg_checks::check(state, &*checks, 1) {
+            super::arg_checks::refused(state, &*checks);
+            ffi::lua_rawcheckstack(state, 1);
+            ffi::lua_pushlstring(state, message.as_ptr().cast(), message.len());
+            drop(message);
+            raise_at(state, 0)
+        }
     }
 }
 
@@ -194,6 +243,7 @@ unsafe extern "C-unwind" fn rust_served(state: *mut ffi::lua_State) -> c_int {
 unsafe fn rust_call(state: *mut ffi::lua_State, kind: Kind) -> c_int {
     std::hint::black_box(kind);
     unsafe {
+        check_arguments(state);
         let count = ffi::lua_gettop(state);
         ffi::lua_rawcheckstack(state, 1);
         ffi::lua_pushvalue(state, ffi::lua_upvalueindex(1));
@@ -330,6 +380,7 @@ unsafe extern "C-unwind" fn luau_served(state: *mut ffi::lua_State) -> c_int {
 unsafe fn luau_call(state: *mut ffi::lua_State, kind: Kind) -> c_int {
     std::hint::black_box(kind);
     unsafe {
+        check_arguments(state);
         let count = ffi::lua_gettop(state);
         ffi::lua_rawcheckstack(state, 1);
         ffi::lua_pushvalue(state, ffi::lua_upvalueindex(1));

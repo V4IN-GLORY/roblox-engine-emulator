@@ -28,7 +28,7 @@ use std::{cell::RefCell, rc::Rc};
 
 use mlua::prelude::*;
 use rbx_dom_weak::types as dom;
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 
 use super::{
     ClassId, Engine, InstanceId, K, NameId, Reflection, State,
@@ -63,6 +63,9 @@ pub struct Behaviors {
     methods: FxHashMap<(ClassId, NameId), Method>,
     getters: FxHashMap<(ClassId, NameId), GetterFn>,
     setters: FxHashMap<(ClassId, NameId), SetterFn>,
+    /// Methods whose behaviour checks its own arguments as measured for it, which the reflection's checks (lua/arg_checks.rs)
+    /// leave to it
+    own_argument_checks: FxHashSet<(ClassId, NameId)>,
 }
 
 fn find<'a, T>(
@@ -85,11 +88,23 @@ impl Behaviors {
     #[inline(never)]
     pub fn add_method(&mut self, class: ClassId, name: NameId, method: MethodFn) {
         self.methods.insert((class, name), Method::Rust(method));
+        self.own_argument_checks.remove(&(class, name));
     }
 
     #[inline(never)]
     pub fn add_lua_method(&mut self, class: ClassId, name: NameId, function: LuaFunction) {
         self.methods.insert((class, name), Method::Lua(function));
+        self.own_argument_checks.remove(&(class, name));
+    }
+
+    /// The method just added at (class, name) checks its own arguments as measured for it (its own words, its own order, its
+    /// own price for raising), so the reflection's checks (lua/arg_checks.rs) leave them to it.
+    pub fn checks_own_arguments(&mut self, class: ClassId, name: NameId) {
+        self.own_argument_checks.insert((class, name));
+    }
+
+    pub fn has_own_argument_checks(&self, class: ClassId, name: NameId) -> bool {
+        self.own_argument_checks.contains(&(class, name))
     }
 
     #[inline(never)]

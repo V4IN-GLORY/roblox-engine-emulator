@@ -8,6 +8,7 @@
 //! never cross a Rust frame.
 
 pub mod actors;
+pub mod arg_checks;
 pub mod bindable;
 pub mod builtins;
 pub mod cfunction;
@@ -221,7 +222,15 @@ where
     F: Fn(&Lua, LuaMultiValue) -> Ret + 'static,
 {
     let _ = engine;
-    wrapped_boxed(lua, name, cfunction::Kind::Served, Box::new(function))
+    wrapped_boxed(lua, name, cfunction::Kind::Served, Box::new(function), None)
+}
+
+/// [`wrapped`] for a reflected method's Rust behaviour read as a value (`obj.Method(obj, ...)`): `checks` first (arg_checks).
+pub fn method_wrapped<F>(lua: &Lua, name: &str, checks: Option<&'static arg_checks::ArgPlan>, function: F) -> LuaResult<LuaFunction>
+where
+    F: Fn(&Lua, LuaMultiValue) -> Ret + 'static,
+{
+    wrapped_boxed(lua, name, cfunction::Kind::Served, Box::new(function), checks)
 }
 
 /// [`wrapped`] for a global or a library's function ([`cfunction::Kind::Library`]).
@@ -229,7 +238,7 @@ pub fn library_function<F>(lua: &Lua, name: &str, function: F) -> LuaResult<LuaF
 where
     F: Fn(&Lua, LuaMultiValue) -> Ret + 'static,
 {
-    wrapped_boxed(lua, name, cfunction::Kind::Library, Box::new(function))
+    wrapped_boxed(lua, name, cfunction::Kind::Library, Box::new(function), None)
 }
 
 #[inline(never)]
@@ -238,9 +247,10 @@ fn wrapped_boxed(
     name: &str,
     kind: cfunction::Kind,
     function: Box<dyn Fn(&Lua, LuaMultiValue) -> Ret + 'static>,
+    checks: Option<&'static arg_checks::ArgPlan>,
 ) -> LuaResult<LuaFunction> {
     let raw = lua.create_function(move |lua, args: LuaMultiValue| encode(lua, function(lua, args)))?;
-    cfunction::over_rust(lua, name, kind, raw)
+    cfunction::over_rust_checked(lua, name, kind, raw, checks)
 }
 
 /// Creates a Lua function backed by a type-erased closure so cold callbacks share one

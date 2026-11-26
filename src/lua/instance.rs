@@ -97,25 +97,27 @@ fn method_function(lua: &Lua, engine: &Rc<Engine>, class: ClassId, name: NameId)
 }
 
 /// The function a method call (`instance:Name(...)`) runs: a Rust behaviour's protocol function
-/// (the raw namecall checks its results), a Luau behaviour, or the unimplemented stand-in.
+/// (the raw namecall checks its results), a Luau behaviour, or the unimplemented stand-in, with the argument checks the raw
+/// namecall runs before a Rust behaviour (the others' C functions check their own).
 /// `None`: not a method.
-pub fn call_function(lua: &Lua, engine: &Rc<Engine>, class: ClassId, name: NameId) -> LuaResult<Option<LuaFunction>> {
+pub fn call_function(lua: &Lua, engine: &Rc<Engine>, class: ClassId, name: NameId) -> LuaResult<Option<(LuaFunction, Option<&'static super::arg_checks::ArgPlan>)>> {
     if !matches!(engine.resolve_member(class, name), Member::Method { .. }) {
         return Ok(None);
     }
     let found = engine.behaviors.borrow().find_method_or_alias(&engine.reflection, class, name).map(|(owner, f)| (owner, f.clone()));
     let Some((owner, method)) = found else {
         return match unimplemented_function(lua, engine, class, name)? {
-            LuaValue::Function(function) => Ok(Some(function)),
+            LuaValue::Function(function) => Ok(Some((function, None))),
             _ => Ok(None),
         };
     };
     let method = match method {
-        crate::services::Method::Lua(function) => return lua_method(lua, engine, owner, name, function).map(Some),
+        crate::services::Method::Lua(function) => return lua_method(lua, engine, owner, name, function).map(|function| Some((function, None))),
         crate::services::Method::Rust(method) => method,
     };
+    let checks = super::arg_checks::cast_plan(engine, owner, name);
     if let Some(existing) = engine.lua.borrow().call_methods.get(&(owner, name)) {
-        return Ok(Some(existing.clone()));
+        return Ok(Some((existing.clone(), checks)));
     }
     let e = engine.clone();
     let method_name = engine.reflection.name(name).to_string();
@@ -132,7 +134,7 @@ pub fn call_function(lua: &Lua, engine: &Rc<Engine>, class: ClassId, name: NameI
         encode(lua, outcome)
     }))?;
     engine.lua.borrow_mut().call_methods.insert((owner, name), function.clone());
-    Ok(Some(function))
+    Ok(Some((function, checks)))
 }
 
 fn method_function_uncached(lua: &Lua, engine: &Rc<Engine>, class: ClassId, name: NameId) -> LuaResult<LuaValue> {
@@ -155,7 +157,8 @@ fn method_function_uncached(lua: &Lua, engine: &Rc<Engine>, class: ClassId, name
     // Model.GetPivot(aPart), workspace.Raycast(aWorldModel, ...) and game.FindFirstChild(workspace, "x") run)
     let declaring = engine.reflection.declaring_class(owner, name);
     let label = method_name.clone();
-    let function = wrapped(lua, engine, &label, move |lua, args| {
+    let checks = super::arg_checks::cast_plan(engine, owner, name);
+    let function = super::method_wrapped(lua, &label, checks, move |lua, args| {
         let args = Args::new(args);
         let Some(id) = args.instance(0) else {
             return raise(format!("Expected ':' not '.' calling member function {method_name}"));
@@ -195,13 +198,14 @@ fn lua_method(lua: &Lua, engine: &Rc<Engine>, owner: ClassId, name: NameId, func
     let wrapped = if is_engine {
         function
     } else {
-        super::cfunction::over_luau(lua, engine.reflection.name(name), super::cfunction::Kind::Served, function)?
+        let checks = super::arg_checks::plan(engine, owner, name);
+        super::cfunction::over_luau_checked(lua, engine.reflection.name(name), super::cfunction::Kind::Served, function, checks)?
     };
     engine.lua.borrow_mut().lua_methods.insert((owner, name), (body, wrapped.clone()));
     Ok(wrapped)
 }
 
-/// A reflected method no behaviour implements: records the call and returns nil.
+/// A reflected method no behaviour implements: checks its arguments (arg_checks), records the call and returns nil.
 pub(crate) fn unimplemented_function(lua: &Lua, engine: &Rc<Engine>, class: ClassId, name: NameId) -> LuaResult<LuaValue> {
     if let Some(existing) = engine.lua.borrow().unimplemented.get(&(class, name)) {
         return Ok(LuaValue::Function(existing.clone()));
@@ -210,10 +214,12 @@ pub(crate) fn unimplemented_function(lua: &Lua, engine: &Rc<Engine>, class: Clas
     let class_label = engine.reflection.class(class).name.to_string();
     let member = engine.reflection.name(name).to_string();
     let label = member.clone();
-    let function = super::named(lua, &label, super::cfunction::Kind::Library, super::create_boxed_void(lua, Box::new(move |lua| {
+    let body = super::create_boxed_void(lua, Box::new(move |lua| {
         e.missing(Some(lua), &class_label, &member);
         Ok(())
-    }))?)?;
+    }))?;
+    let checks = super::arg_checks::stand_in_plan(engine, class, name);
+    let function = super::cfunction::over_rust_checked(lua, &label, super::cfunction::Kind::Library, body, checks)?;
     engine.lua.borrow_mut().unimplemented.insert((class, name), function.clone());
     Ok(LuaValue::Function(function))
 }

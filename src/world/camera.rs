@@ -36,7 +36,7 @@ use rustc_hash::FxHashMap;
 use super::{cframe_name, frame, method, query, vector_arg};
 use crate::{
     Engine, InstanceId, NameId,
-    lua::{Args, Flow, convert, instance_id, instance_value, raise, typeof_value, types::LEnumItem, values},
+    lua::{Args, Flow, convert, instance_value, raise, values},
     value::Value,
 };
 
@@ -178,38 +178,7 @@ fn ray(lua: &Lua, (origin, direction): (Vec3, Vec3)) -> LuaResult<LuaMultiValue>
     LuaValue::UserData(lune_roblox::datatypes::create::ray(lua, ray)?).into_lua_multi(lua)
 }
 
-/// What a value is called in a cast error, as a client names it: a number "double", a boolean "bool", a table "Array" (empty or
-/// with an array part) or "Dictionary", an Instance "Instance", an EnumItem its enum ("Unable to cast KeyCode to float"), a CFrame
-/// "CoordinateFrame", a function "Function", an RBXScriptSignal "EventInstance", an Enum, Enums, thread or plain userdata "null",
-/// any other value its typeof. Measured on a playing client and its server (Studio 0.748), the same in each of the Camera's casts
-/// (to float, int, Vector3, CoordinateFrame, CameraPanMode and Array) and in BulkMoveTo's; EncodingService's casts to HashAlgorithm
-/// name values the same way (0.747).
-pub(crate) fn cast_name(engine: &Engine, value: &LuaValue) -> String {
-    match value {
-        LuaValue::Number(_) | LuaValue::Integer(_) => "double".into(),
-        LuaValue::Boolean(_) => "bool".into(),
-        LuaValue::Table(table) => {
-            let array = table.raw_len() > 0 || table.clone().pairs::<LuaValue, LuaValue>().next().is_none();
-            (if array { "Array" } else { "Dictionary" }).into()
-        }
-        LuaValue::Function(_) => "Function".into(),
-        LuaValue::Thread(_) => "null".into(),
-        other if instance_id(other).is_some() => "Instance".into(),
-        other => {
-            if let LuaValue::UserData(ud) = other
-                && let Ok(item) = ud.borrow::<LEnumItem>()
-            {
-                return engine.reflection.enum_item_type_name(item.0).to_string();
-            }
-            match typeof_value(engine, other).as_str() {
-                "CFrame" => "CoordinateFrame".into(),
-                "RBXScriptSignal" => "EventInstance".into(),
-                "Enum" | "Enums" | "userdata" => "null".into(),
-                name => name.into(),
-            }
-        }
-    }
-}
+pub(crate) use crate::lua::convert::cast_name;
 
 /// A float argument: a number, a boolean (true is 1), or a string that reads as a number; float32.
 pub(super) fn float_argument(lua: &Lua, engine: &Engine, args: &Args, at: usize) -> Result<f32, Flow> {

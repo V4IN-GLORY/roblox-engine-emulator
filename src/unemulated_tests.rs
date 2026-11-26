@@ -157,7 +157,7 @@ fn a_clean_run_lists_nothing() {
 	local Part = Instance.new("Part")
 	Part.Parent = workspace
 	game:GetService("ContextActionService"):UnbindAction("none")
-	game:GetService("AnalyticsService"):LogCustomEvent(nil, "event")
+	game:GetService("AnalyticsService"):LogCustomEvent(game:GetService("Players").LocalPlayer, "event")
 	game:GetService("Players").LocalPlayer:Move(Vector3.new(1, 0, 0))
 	print(Part.Name)
 end
