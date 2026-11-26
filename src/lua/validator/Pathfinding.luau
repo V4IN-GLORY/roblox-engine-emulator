@@ -1,0 +1,3 @@
+--!nocheck
+-- Validator extension: see validator/packages/Pathfinding.md for what this file owns.
+local R = ...

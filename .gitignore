@@ -3,3 +3,6 @@
 /profile-view/.cache/
 /out/
 /tools/hw-counters/target/
+target/
+validator/probe/StubProbe.luau
+__pycache__/

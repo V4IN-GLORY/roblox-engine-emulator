@@ -14,6 +14,16 @@ use crate::{Engine, instance as core};
 pub(crate) static SERVICES: &str = include_str!("services.luau");
 pub(crate) static SERVER: &str = include_str!("server.luau");
 pub(crate) static PROFILE: &str = include_str!("profile.luau");
+/// Validator extensions (validator/HANDOFF.md): one file per API area, loaded after the stock services so a file can
+/// replace a stock stub. Every file runs in every run context and checks R.IsServer itself.
+pub(crate) static VALIDATOR: &[(&str, &str)] = &[
+    ("=ree.validator.Humanoid", include_str!("validator/Humanoid.luau")),
+    ("=ree.validator.ClientInput", include_str!("validator/ClientInput.luau")),
+    ("=ree.validator.Commerce", include_str!("validator/Commerce.luau")),
+    ("=ree.validator.ContextGuards", include_str!("validator/ContextGuards.luau")),
+    ("=ree.validator.Pathfinding", include_str!("validator/Pathfinding.luau")),
+    ("=ree.validator.Misc", include_str!("validator/Misc.luau")),
+];
 
 /// The named registry value holding server.luau's R.SetJoinData (a server run's only): what
 /// Context.SetJoinData calls to give a player the join data Player:GetJoinData returns
@@ -629,11 +639,16 @@ pub fn load(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
     crate::cost::engine_luau(lua, services)?.call::<()>(r.clone())?;
     // A server's own services (DataStores, MemoryStores, MessagingService, the server side of remotes)
     if engine.options.server() {
-        let server = modules::load_engine_luau(lua, SERVER, "=rur.server", Some(shared))?;
+        let server = modules::load_engine_luau(lua, SERVER, "=rur.server", Some(shared.clone()))?;
         crate::cost::engine_luau(lua, server)?.call::<()>(r.clone())?;
         if let LuaValue::Function(set_join_data) = r.get::<LuaValue>("SetJoinData")? {
             lua.set_named_registry_value(SET_JOIN_DATA, set_join_data)?;
         }
+    }
+    r.set("IsServer", engine.options.server())?;
+    for (name, source) in VALIDATOR {
+        let extension = modules::load_engine_luau(lua, source, name, Some(shared.clone()))?;
+        crate::cost::engine_luau(lua, extension)?.call::<()>(r.clone())?;
     }
     // The client profile's answers, where it sets what the stubs read (else the stubs stay as they are)
     if r.raw_get::<LuaValue>("Profile")?.is_table() {

@@ -1,0 +1,3 @@
+--!nocheck
+-- Validator extension: see validator/packages/Commerce.md for what this file owns.
+local R = ...

@@ -1,0 +1,3 @@
+--!nocheck
+-- Validator extension: see validator/packages/ContextGuards.md for what this file owns.
+local R = ...
