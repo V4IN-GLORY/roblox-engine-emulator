@@ -49,6 +49,16 @@ SERVER_WORDS = re.compile(r"\bserver[- ]side\b|\bserver script\b|\bon the server
 # A module's answer: the code ends returning a table it built, whose functions that take no arguments the run calls
 MODULE_RETURN = re.compile(r"^return\s+([A-Za-z_]\w*)\s*$")
 TOP_RETURN = re.compile(r"^return\b")
+# The globals a script has (Luau's and Roblox's): an undefined name a typo away from one is the code's mistake
+KNOWN_GLOBALS = {"task", "game", "workspace", "script", "math", "string", "table", "coroutine", "buffer", "utf8", "bit32", "debug",
+	"os", "Instance", "Vector3", "Vector2", "CFrame", "Color3", "UDim", "UDim2", "Enum", "BrickColor", "TweenInfo", "Ray",
+	"RaycastParams", "OverlapParams", "NumberSequence", "ColorSequence", "NumberRange", "Rect", "Region3", "Font", "Content",
+	"SharedTable", "print", "warn", "error", "require", "pairs", "ipairs", "next", "typeof", "type", "tostring", "tonumber",
+	"select", "pcall", "xpcall", "assert", "setmetatable", "getmetatable", "rawget", "rawset", "rawequal", "unpack", "tick",
+	"time", "wait", "spawn", "delay", "shared", "plugin", "settings", "UserSettings", "DateTime", "Random", "PhysicalProperties"}
+# A service a script uses by its class name as if it had its GetService line (`ReplicatedStorage:WaitForChild(...)`)
+SERVICE_USE = re.compile(r"\b([A-Z]\w+)\s*[:.]")
+NIL_ARGUMENT = re.compile(r"missing or nil|got nil|\bis null\b")
 STATEMENT_CLOSER = re.compile(r"^(?:[})\]]|end\b)")
 MISSING_MEMBER = re.compile(r"^(?:.*?:\d+: )?(.+?) is not a valid member of (\w+) \"([^\"]*)\"$")
 REQUIRE_INVALID = "Attempted to call require with invalid argument(s)."
@@ -165,13 +175,28 @@ def scripts(lines: list[str]) -> list[tuple[int, int]]:
 	return ranges
 
 
+def service_locals(script: str) -> list[str]:
+	"""The services a script uses by their class name (`ReplicatedStorage:WaitForChild(...)`) without defining that name: an
+	answer that leaves out the `local X = game:GetService("X")` line every script has."""
+	services = class_data()[1]
+	used = sorted({name for name in SERVICE_USE.findall(script) if name in services})
+	return [name for name in used if not re.search(rf"\blocal\s+[\w\s,]*\b{name}\b|^\s*{name}\s*=|\bfunction\b[^(\n]*\([^)]*\b{name}\b", script, re.M)]
+
+
 def harness(code: str, context: str, actor: bool, ranges: list[tuple[int, int]] | None = None) -> tuple[str, list[int]]:
 	"""The run's harness, and for each of its lines the code's line it holds (-1 for its own): each script the code holds
 	(scripts) runs in a function of its own (a vararg one, as a script's chunk is) in a thread of its own, so one that errors or
 	waits doesn't keep the next from running, and a module's no-argument functions are called after it loads (module_calls).
-	One script alone is the harness's body. With actor, a harness that places the code as a script inside an Actor."""
+	One script alone is the harness's body. With actor, a harness that places the code as a script inside an Actor. Each
+	script's first line gets the GetService lines of the services it uses by name without one (service_locals), on that line
+	so every line keeps its number."""
 	code = EXPORT_TYPE.sub(r"\1type", code)
 	lines = code.split("\n")
+	for first, last in ranges or scripts(lines):
+		defined = service_locals("\n".join(lines[first:last]))
+		if defined and first < len(lines):
+			lines[first] = "".join(f"local {name} = game:GetService(\"{name}\"); " for name in defined) + lines[first]
+	code = "\n".join(lines)
 	if actor:
 		# (a server Script runs under ServerScriptService; a client's LocalScript under its PlayerScripts)
 		if context == "server":
@@ -319,18 +344,17 @@ def ALL_MEMBERS() -> set[str]:
 	return _ALL_MEMBERS
 
 
-def defined_in(name: str, earlier: str) -> bool:
-	"""Whether the conversation's earlier code gives `name` a meaning: a local, a function, an assignment, a loop variable or a
-	function's parameter (an answer that changes a handler's body uses its `player`)."""
-	word = re.escape(name)
-	return bool(re.search(rf"\blocal\s+(?:function\s+)?[\w\s,]*?\b{word}\b|\bfunction\s+{word}\b|^\s*{word}\s*=|\bfor\s+[\w\s,]*?\b{word}\b|"
-		rf"\bfunction\b[^(\n]*\([^)]*\b{word}\b", earlier, re.M))
-
-
-def context_of(job: dict, index: int) -> str:
-	"""The code a script at the job's line `index` builds on: the conversation's earlier code and the answer's other scripts."""
-	own = next((number for number, (first, last) in enumerate(job["ranges"]) if first <= index < last), -1)
-	return "\n".join([job["earlier"], *job["others"], *(text for number, text in enumerate(job["scripts"]) if number != own)])
+def typo(name: str, code: str, line: str, earlier: str) -> bool:
+	"""Whether an undefined name is a misspelling of something that is defined: a Luau or Roblox global (`ask.wait` for task)
+	or a name the code itself declares (`plyer` for its `player`), used as that thing is (indexed or called on the line, so a
+	value named `text` is no misspelled `next`)."""
+	lowered = name.lower()
+	if len(lowered) < 3 or not re.search(rf"\b{re.escape(name)}\s*[.:(]", line):
+		return False
+	declared = set(re.findall(r"\blocal\s+(?:function\s+)?(\w+)|\bfunction\s+(?:\w+[.:])?(\w+)", code))
+	# (a name the user's code uses is that code's, however close to one of the answer's own: `template` beside `templated`)
+	candidates = KNOWN_GLOBALS | ({word for pair in declared for word in pair if word} if not re.search(rf"\b{re.escape(name)}\b", earlier) else set())
+	return any(candidate.lower() != lowered and _near(lowered, candidate.lower()) for candidate in candidates)
 
 
 def finish(row: dict, job: dict, where: list[int]) -> dict:
@@ -338,10 +362,10 @@ def finish(row: dict, job: dict, where: list[int]) -> dict:
 	code: its Luau (and its flags, LUAU_FLAGS) are newer than luau-lsp's.
 
 	verdict: ok; untrusted (it reached an API ree doesn't emulate); environment (only what the place would hold is missing);
-	context (besides those, only lines using names the conversation's earlier code defines fail: the answer is a change to that
-	code, fine where it goes); snippet (only lines using a global nothing defines fail: a fragment meant to be pasted into code
-	the row doesn't have); error (anything else: the code is wrong). pass: ok, environment or context. Snippets and context need
-	luau-lsp's warnings."""
+	context (besides those, only lines using a name the code never defines fail: a name from the user's code, the
+	conversation's earlier code or another block, a handler's `player`; the answer is fine where it goes); error (anything
+	else: the code is wrong, a misspelled global such as `ask.wait` included). pass: ok, environment or context. A service the
+	code uses by name without its GetService line is no undefined name: the harness defines it (service_locals)."""
 	compiled = not any(PARSE_ERROR.search(error) for error in row["errors"])
 	names = {unknown[2] for unknown in map(UNKNOWN_GLOBAL.match, row["warnings"]) if unknown}
 	if compiled:
@@ -356,20 +380,20 @@ def finish(row: dict, job: dict, where: list[int]) -> dict:
 		line = int(at[1]) - 1 if at else -1
 		index = where[line] if 0 <= line < len(where) else -1
 		text = lines[index] if 0 <= index < len(lines) else ""
-		# (an engine call's error names no line: in a fragment it's most likely an undefined global passed in, `FireClient(player)`)
-		used = [name for name in names if not at or re.search(rf"\b{re.escape(name)}\b", text)]
-		if not used:
-			kinds.add("error")
-		elif all(defined_in(name, context_of(job, index)) for name in used):
-			kinds.add("context")
+		# (an error that names no line comes from an engine call: in a fragment, a nil argument is most likely an undefined name
+		# passed in, `FireClient(player)`; any other is the code's)
+		if at:
+			used = [name for name in names if re.search(rf"\b{re.escape(name)}\b", text)]
 		else:
-			kinds.add("snippet")
+			used = list(names) if NIL_ARGUMENT.search(error) else []
+		earlier = "\n".join([job["earlier"], *job["others"]])
+		kinds.add("context" if used and not any(typo(name, job["code"], text, earlier) for name in used) else "error")
 	if row["unemulated"]:
 		row["verdict"] = "untrusted"
 	elif not row["errors"]:
 		row["verdict"] = "ok"
 	else:
-		row["verdict"] = next(kind for kind in ("error", "snippet", "context", "environment") if kind in kinds)
+		row["verdict"] = next(kind for kind in ("error", "context", "environment") if kind in kinds)
 	row["pass"] = row["verdict"] in ("ok", "environment", "context")
 	return row
 
@@ -434,7 +458,7 @@ def plan(row: dict, context: str) -> list[dict]:
 	return planned
 
 
-WORST = ["error", "snippet", "untrusted", "context", "environment", "ok"]
+WORST = ["error", "untrusted", "context", "environment", "ok"]
 
 
 def merge(results: list[dict]) -> dict:
