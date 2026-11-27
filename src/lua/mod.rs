@@ -13,6 +13,7 @@ pub mod bindable;
 pub mod builtins;
 pub mod cfunction;
 pub mod convert;
+pub(crate) mod coverage;
 pub mod curve_keys;
 mod fallback;
 pub mod float_mode;
@@ -173,6 +174,8 @@ pub struct Prelude {
 /// the raw API's weak / anchor tables (`raw.rs`).
 #[derive(Default)]
 pub struct LuaRefs {
+    /// `--fire-handlers`: what the run's scripts handed the engine to call, for the coverage pass (coverage.rs)
+    pub(crate) coverage: coverage::Recorded,
     /// The raw Instance API (userdata, dispatch cache, lifetime)
     pub raw: Option<Rc<raw::Api>>,
     pub enum_items: Vec<Option<LuaAnyUserData>>,

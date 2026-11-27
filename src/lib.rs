@@ -162,6 +162,9 @@ pub struct Options {
     /// stays pinned), so a recording that changes with it hinges on when within a frame a script reads os.clock. None: the
     /// clock as modelled
     pub clock_probe: Option<f64>,
+    /// `--fire-handlers`: after the run, a coverage pass calls once each handler the run's scripts connected or set that no
+    /// event of the run called (lua/coverage.rs, docs/engine.md "Coverage pass")
+    pub fire_handlers: bool,
 }
 
 impl Default for Options {
@@ -184,6 +187,7 @@ impl Default for Options {
             project: None,
             place_prices: cost::PlacePrices::default(),
             clock_probe: None,
+            fire_handlers: false,
         }
     }
 }

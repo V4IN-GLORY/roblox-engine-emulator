@@ -21,7 +21,7 @@ for name in sorted(os.listdir(folder)):
 		continue
 	context = "client" if ".client." in name else "server"
 	wantOk = ".ok." in name
-	result = validate(open(os.path.join(folder, name), encoding="utf-8").read(), context, ree)
+	result = validate(open(os.path.join(folder, name), encoding="utf-8").read(), context, ree, warnings=False)
 	if result["ok"] is wantOk:
 		passed += 1
 		continue

@@ -866,6 +866,9 @@ pub(crate) fn run_done(emulator: &Emulator, args: &RecordArgs, host: &Host, ran:
     if engine.options.server() {
         summary["runContext"] = json!("server");
     }
+    if engine.options.fire_handlers {
+        summary["coverage"] = crate::lua::coverage::summary(engine);
+    }
     if let Some(loopback) = crate::loopback::summary(engine) {
         summary["runContext"] = json!("loopback");
         summary["loopback"] = loopback;
@@ -1337,11 +1340,19 @@ pub(crate) fn finish_run(lua: &Lua, engine: &Rc<Engine>, args: &RecordArgs, reco
             steps.code = crate::watchdog::EXIT_SCRIPT_TIMEOUTS;
         }
     }
+    // (`--fire-handlers`: a harness still waiting when the frames end may go on in the coverage pass, and its outcome is the one
+    // after it; a failure there is a line of the pass)
+    let waiting = matches!(harness_call.outcome().map_err(lua_error)?, CallOutcome::Pending);
+    if engine.options.fire_handlers && steps.code == 0 && recorder.is_none() {
+        coverage_pass(lua, engine, args, &checkpoint, &mut steps)?;
+    }
     if steps.status == "ok" {
         match harness_call.outcome().map_err(lua_error)? {
             CallOutcome::Pending => steps.status = "yielded".into(),
             CallOutcome::Failed(message, trace) => {
+                engine.state.borrow_mut().output.coverage = waiting && engine.options.fire_handlers;
                 engine.output("error", message.clone(), trace);
+                engine.state.borrow_mut().output.coverage = false;
                 steps.fail(message);
             }
             _ => {}
@@ -1352,6 +1363,37 @@ pub(crate) fn finish_run(lua: &Lua, engine: &Rc<Engine>, args: &RecordArgs, reco
     // (a failed run exits as a failed command does; a guard that stopped it keeps its own code)
     let code = if code == 0 && status == "error" { EXIT_RUN_ERROR } else { code };
     Ok(Ran { status, failure, frames: stepped, harness, checkpoint: checkpoint.reached.get(), split: checkpoint.split.get(), framed: checkpoint.framed.get(), code, done, unchecked: checkpoint.unchecked.borrow().clone() })
+}
+
+/// How long each round of the coverage pass steps, and how many rounds of calls it makes at most (a handler a called one connects
+/// is called in the next round: a CharacterAdded handler's Humanoid.Died)
+const COVERAGE_ROUND: f64 = 0.25;
+const COVERAGE_ROUNDS: usize = 3;
+
+/// `--fire-handlers`' coverage pass (lua/coverage.rs), after the run's frames and its harness's outcome, a round of frames per
+/// step: the player joins, it spawns its character, then each round calls the recorded handlers nothing has called, until one
+/// has none to call. Its lines carry `coverage`.
+fn coverage_pass(lua: &Lua, engine: &Rc<Engine>, args: &RecordArgs, checkpoint: &Checkpoint, steps: &mut Steps) -> Result<(), String> {
+    use crate::lua::coverage;
+    let lua_error = |error: LuaError| error.to_string();
+    engine.state.borrow_mut().output.coverage = true;
+    let mut extended = RecordArgs { frame_times: None, ..args.clone() };
+    for round in 0..COVERAGE_ROUNDS + 2 {
+        match round {
+            0 => coverage::join(engine).map_err(lua_error)?,
+            1 => coverage::spawn(engine).map_err(lua_error)?,
+            _ if coverage::fire(lua, engine).map_err(lua_error)? == 0 => break,
+            _ => {}
+        }
+        scheduler::flush_deferred(lua, engine).map_err(lua_error)?;
+        extended.seconds += COVERAGE_ROUND;
+        step_frames(lua, engine, &extended, None, checkpoint, steps, false)?;
+        if steps.code != 0 || engine.state.borrow().output.done {
+            break;
+        }
+    }
+    engine.state.borrow_mut().output.coverage = false;
+    Ok(())
 }
 
 /// Where a run's frames are: the frames stepped, the next one's index in the schedule and the moment

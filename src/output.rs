@@ -51,6 +51,8 @@ pub struct Entry {
     pub trace: Option<String>,
     /// A loopback run's side that wrote it ("server", "client"); none in every other run
     pub side: Option<&'static str>,
+    /// Written during `--fire-handlers`' coverage pass (lua/coverage.rs): a handler the run's own events never called raised it
+    pub coverage: bool,
 }
 
 impl Entry {
@@ -62,6 +64,9 @@ impl Entry {
         }
         if let Some(side) = self.side {
             line["side"] = serde_json::json!(side);
+        }
+        if self.coverage {
+            line["coverage"] = serde_json::json!(true);
         }
         line
     }
@@ -85,6 +90,8 @@ pub struct Output {
     pub side: Option<&'static str>,
     /// A loopback run's server: its lines go to the client's list, which holds both sides' in the order written
     pub forward: Option<Forward>,
+    /// The coverage pass runs: its lines carry it ([`Entry::coverage`])
+    pub coverage: bool,
 }
 
 /// The engine whose list a loopback server's lines go to ([`Output::forward`])
@@ -111,7 +118,7 @@ impl Output {
                 diagnostic(trace);
             }
         }
-        self.deliver(Entry { kind, message, time, trace, side: self.side });
+        self.deliver(Entry { kind, message, time, trace, side: self.side, coverage: self.coverage });
     }
 
     /// Keeps a line: in a loopback server's, in the client's list
@@ -192,7 +199,7 @@ impl Output {
         let message = format!("{key} is not emulated");
         self.missing.push((key.to_string(), 1));
         // (the verbose line above stands for it: hosts' recorded verbose output keeps that one)
-        self.deliver(Entry { kind, message, time, trace: at, side: self.side });
+        self.deliver(Entry { kind, message, time, trace: at, side: self.side, coverage: self.coverage });
     }
 
     /// The unemulated members used, as `ree run` and `ree record` summaries list them ([`unemulated`]).

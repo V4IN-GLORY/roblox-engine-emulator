@@ -55,7 +55,24 @@ impl Fallback {
 
     /// The call's results, or its yield with them registered as its resumption.
     pub(crate) fn answer(&self, lua: &Lua, engine: &Rc<Engine>) -> LuaResult<LuaMultiValue> {
-        let value = match &self.returns {
+        let value = self.returns.make(lua, engine)?;
+        if !self.yields {
+            return Ok(LuaMultiValue::from_iter(value));
+        }
+        let thread = lua.current_thread();
+        if let Err(refused) = super::refuse_unyieldable(&thread, super::NOT_YIELDABLE) {
+            return super::encode(lua, Err(refused));
+        }
+        let resumed: Vec<Value> = value.iter().map(convert::from_lua).collect();
+        engine.state.borrow_mut().sched.schedule_task(TimerKind::Delay, 0.0, thread, resumed);
+        super::encode(lua, Err(Flow::Yield))
+    }
+}
+
+impl Returns {
+    /// One value (None: nothing, as a Void method returns).
+    fn make(&self, lua: &Lua, engine: &Rc<Engine>) -> LuaResult<Option<LuaValue>> {
+        Ok(match self {
             Returns::Nothing => None,
             Returns::Nil => Some(LuaValue::Nil),
             Returns::Shared(value) => Some(value.clone()),
@@ -73,18 +90,20 @@ impl Fallback {
                 let (event, connect) = made.get().expect("made above");
                 Some(if *connects { connect.call::<LuaValue>(())? } else { event.clone() })
             }
-        };
-        if !self.yields {
-            return Ok(LuaMultiValue::from_iter(value));
-        }
-        let thread = lua.current_thread();
-        if let Err(refused) = super::refuse_unyieldable(&thread, super::NOT_YIELDABLE) {
-            return super::encode(lua, Err(refused));
-        }
-        let resumed: Vec<Value> = value.iter().map(convert::from_lua).collect();
-        engine.state.borrow_mut().sched.schedule_task(TimerKind::Delay, 0.0, thread, resumed);
-        super::encode(lua, Err(Flow::Yield))
+        })
     }
+}
+
+/// A value of a reflected type as a stand-in returning that type answers it (the coverage pass's event arguments,
+/// lua/coverage.rs); None where it answers nothing (a Void, a Tuple).
+pub(crate) fn value_of(lua: &Lua, engine: &Rc<Engine>, type_info: &TypeInfo) -> LuaResult<Option<LuaValue>> {
+    returns(lua, engine, type_info)?.make(lua, engine)
+}
+
+/// A class that names what kind of instance a value is rather than one to make: a service, or one Roblox never creates that
+/// has subclasses (BasePart, Instance)
+pub(crate) fn is_abstract(info: &crate::reflection::ClassInfo) -> bool {
+    info.service || (!info.creatable && !info.subclasses.is_empty())
 }
 
 /// The answer for a reflected return type. Where the capture disagrees with the type, the type wins and docs/engine.md says where.
@@ -108,7 +127,7 @@ fn returns(lua: &Lua, engine: &Rc<Engine>, type_info: &TypeInfo) -> LuaResult<Re
             let info = reflection.class(class);
             // (an abstract class names what kind of instance comes back, not one to make: GetRootPart's Instance, Capture's
             // subclasses; Roblox's answers for these were nil in the capture)
-            if info.service || (!info.creatable && !info.subclasses.is_empty()) {
+            if is_abstract(info) {
                 Returns::Nil
             } else {
                 Returns::Instance(class)

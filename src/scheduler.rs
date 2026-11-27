@@ -1505,6 +1505,9 @@ pub(crate) struct DispatchPrice {
 /// dispatch to the handler and, while a profile steps, keeps the run's whole work by the site that connected it
 /// (profiler/attribution.rs)
 pub(crate) fn run_handler(lua: &Lua, engine: &Rc<Engine>, connection: ConnectionId, signal: SignalId, thread: &LuaThread, args: LuaMultiValue, dispatch: DispatchPrice) {
+    if engine.options.fire_handlers {
+        crate::lua::coverage::ran(engine, connection);
+    }
     let profiling = crate::profiler::attribution::on();
     // (only a profile reads the work total and the kind bits, so an ordinary run skips both)
     let mut work_before = 0.0;

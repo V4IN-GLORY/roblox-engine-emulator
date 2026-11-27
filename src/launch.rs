@@ -183,6 +183,8 @@ pub struct Args {
     /// `--client-profile <preset|file.json|{json}>`, repeatable: the client profile's layers, later over earlier
     /// ([`client_profile`])
     pub client_profiles: Vec<String>,
+    /// `--fire-handlers`: the coverage pass ([`crate::Options::fire_handlers`])
+    pub fire_handlers: bool,
 }
 
 fn size(key: &str, text: &str) -> Result<(f64, f64), String> {
@@ -204,6 +206,7 @@ impl Args {
             "--load-module" => self.load_module = true,
             "--load-string" => self.load_string = true,
             "--native" => self.native = true,
+            "--fire-handlers" => self.fire_handlers = true,
             "--roots" => self.roots = need()?.split(';').filter(|r| !r.is_empty()).map(str::to_string).collect(),
             "--project" => self.project = Some(need()?),
             "--place" => self.place = Some(need()?),
@@ -234,7 +237,7 @@ impl Args {
             "--client-profile" => self.client_profiles.push(need()?),
             _ => return Ok(None),
         }
-        Ok(Some(if matches!(key, "--offline" | "--verbose" | "--no-snapshots" | "--load-module" | "--load-string" | "--native") { 1 } else { 2 }))
+        Ok(Some(if matches!(key, "--offline" | "--verbose" | "--no-snapshots" | "--load-module" | "--load-string" | "--native" | "--fire-handlers") { 1 } else { 2 }))
     }
 }
 
@@ -367,7 +370,7 @@ pub fn prepare(args: &Args, default_repo: &Path) -> Result<Prepared, String> {
         project: project_dir,
         place_prices,
         clock_probe: None,
-        ..Options::default()
+        fire_handlers: args.fire_handlers,
     };
     let mounts = args
         .mounts

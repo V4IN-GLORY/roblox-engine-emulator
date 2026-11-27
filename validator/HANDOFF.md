@@ -12,7 +12,7 @@ We don't need pixel-perfect Roblox. We need **what a script can see** to match R
   export RUSTFLAGS="-C target-feature=+crt-static" CXXFLAGS_x86_64_pc_windows_msvc="-DMI_WIN_INIT_USE_FLS=1"
   cargo build --release --locked --bin ree
   ```
-- Run one file: `python validator/validate.py some.luau --context server|client` → `{"ok", "errors", "unemulated"}`.
+- Run one file: `python validator/validate.py some.luau --context server|client` → `{"ok", "errors", "unemulated", "stubbed", "coverage", "warnings"}`. It runs with `--fire-handlers` (every handler the row connected gets called once after the run; errors there carry `coverage`) and adds luau-lsp diagnostics as `warnings`, which never change `ok`.
 - See what's still missing: `python validator/probe/gaps.py --classes Humanoid,ContextActionService`. The probe has blind spots: on a server it lists no Humanoid gaps, yet `TakeDamage` is unemulated there. Your specs are the real check.
 - `validator/specs/Avatar/TakeDamage.{ok,bad}.luau` are worked examples of the spec format, and both fail today on purpose.
 - Repo's own guide: `AGENTS.md`, `docs/engine.md`, and `docs/cli.md` for run contexts. Read the section for the area you touch.

@@ -827,6 +827,7 @@ fn connect_as(lua: &Lua, engine: &Rc<Engine>, args: LuaMultiValue, once: bool, p
         return raise("Function Event.ConnectParallel can only be used inside scripts");
     }
     let noted = crate::census::active(engine).then(|| callback.clone());
+    let covered = engine.options.fire_handlers.then(|| callback.clone());
     engine.state.borrow().sched.charge(crate::cost::CONNECT);
     if crate::boundary::active() && !engine.state.borrow().sched.is_muted() {
         crate::boundary::enter(lua.state());
@@ -840,6 +841,12 @@ fn connect_as(lua: &Lua, engine: &Rc<Engine>, args: LuaMultiValue, once: bool, p
     };
     if let Some(callback) = noted {
         crate::census::connected(lua, connection, &callback);
+    }
+    // (`--fire-handlers`: a script's connection is called once by the coverage pass if nothing calls it)
+    if let (Some(callback), Some(signal)) = (covered, signal)
+        && connection != ConnectionId::DISCONNECTED
+    {
+        super::coverage::connected(engine, &callback, signal, connection);
     }
     // (a loopback run's remote hands the events that waited for a first connection to this one)
     if let Some(signal) = signal

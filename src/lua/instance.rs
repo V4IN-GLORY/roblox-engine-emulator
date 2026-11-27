@@ -450,6 +450,11 @@ pub fn assign(lua: &Lua, engine: &Rc<Engine>, id: InstanceId, key: &LuaValue, va
             if engine.loopback.borrow().is_some() && matches!(value, LuaValue::Function(_)) {
                 crate::loopback::remotes::callback_set(lua, engine, id)?;
             }
+            if engine.options.fire_handlers
+                && let LuaValue::Function(function) = &value
+            {
+                super::coverage::callback_set(engine, id, name, function);
+            }
             return Ok(());
         }
         Member::Property { property, setter, .. } => {

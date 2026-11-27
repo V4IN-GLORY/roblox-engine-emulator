@@ -14,6 +14,7 @@ use crate::{Engine, instance as core};
 pub(crate) static SERVICES: &str = include_str!("services.luau");
 pub(crate) static SERVER: &str = include_str!("server.luau");
 pub(crate) static PROFILE: &str = include_str!("profile.luau");
+pub(crate) static RIG: &str = include_str!("rig.luau");
 /// Validator extensions (validator/HANDOFF.md): one file per API area, loaded after the stock services so a file can
 /// replace a stock stub. Every file runs in every run context and checks R.IsServer itself.
 pub(crate) static VALIDATOR: &[(&str, &str)] = &[
@@ -641,6 +642,11 @@ pub fn load(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
     let shared = engine.lua.borrow().shared.clone().ok_or_else(|| LuaError::runtime("shared globals"))?;
     let services = modules::load_engine_luau(lua, SERVICES, "=rur.services", Some(shared.clone()))?;
     crate::cost::engine_luau(lua, services)?.call::<()>(r.clone())?;
+    // R.R6Rig: a server's CreateHumanoidModelFromDescription and the coverage pass's character (rig.luau)
+    if engine.options.server() || engine.options.fire_handlers {
+        let rig = modules::load_engine_luau(lua, RIG, "=rur.rig", Some(shared.clone()))?;
+        crate::cost::engine_luau(lua, rig)?.call::<()>(r.clone())?;
+    }
     // A server's own services (DataStores, MemoryStores, MessagingService, the server side of remotes)
     if engine.options.server() {
         let server = modules::load_engine_luau(lua, SERVER, "=rur.server", Some(shared.clone()))?;
@@ -657,6 +663,9 @@ pub fn load(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
     // The client profile's answers, where it sets what the stubs read (else the stubs stay as they are)
     if r.raw_get::<LuaValue>("Profile")?.is_table() {
         load_profile(lua, engine, &r)?;
+    }
+    if engine.options.fire_handlers {
+        super::coverage::load(lua, engine, &r, shared)?;
     }
     engine.clear_member_cache();
     Ok(())

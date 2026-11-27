@@ -306,6 +306,22 @@ A reflected method no behaviour implements (Rust, the engine's Luau or a validat
 
 A method whose name ends in `Async` answers a frame later (Roblox's yield; a thread that cannot yield raises `thread is not yieldable`). Where the capture disagrees with the type, the type wins: `ReflectionService:GetEventsOfClass` and its two siblings (`table`, nil for an unknown class), `Animator:GetTrackByAnimationId` and `MaterialService:GetMaterialVariant` (a leaf class, nil when nothing matches), `AssetService:GetGamePlacesAsync` (`Instance`, a `StandardPages`), the `Object` classes (`typeof` gives `Instance` in ree), and the datatypes ree has no constructor for (`AdReward`, `CollectionHandle`, `ValueCurveKey`: nil). Errors a method raises from its own state checks (not parented, wrong run context, not published) are not stood in for: those are the behaviours' to add.
 
+## Coverage pass (`src/lua/coverage.rs`)
+
+`--fire-handlers` (`Options::fire_handlers`; off by default, and then nothing here runs or is recorded) is for validating a snippet in a short offline run, where nobody joins, touches or clicks and a handler the snippet only connects never runs. While it is on, the run records what its scripts hand the engine to call; the engine's own Luau (`=rur.*`, `=ree.*` chunks) is never recorded, and each kind stops recording at 256:
+
+- connections (`Connect`, `Once`, `ConnectParallel`; `lua/types.rs` connect_as), and whether a handler of each ran (`scheduler::run_handler`, deferred and immediate fires alike);
+- callbacks set on an instance (`OnServerInvoke`, `OnClientInvoke`, `OnInvoke`, `ProcessReceipt`, ...; `lua/instance.rs`);
+- handlers given to the methods that take one (`DataModel:BindToClose`, `ContextActionService:BindAction` / `BindActionAtPriority`): coverage.luau wraps each, after the validator files, so a replaced one is wrapped too.
+
+After the run's frames and its harness's outcome, the pass steps in rounds of 0.25 s of frames (`record/run.rs` coverage_pass):
+
+1. **Join:** a server's player (the client profile's name and `UserId`) is parented to Players, so `PlayerAdded` runs on the real path; a client keeps its local player.
+2. **Spawn:** the player gets the default R6 rig (`R.R6Rig`, server.luau's `CreateHumanoidModelFromDescription` rig) named after it in Workspace as its `Character`, unless it has one: `CharacterAdded` runs, and a harness waiting on it goes on.
+3. **Calls (up to 3 rounds):** every recorded connection still connected whose handler never ran is queued once with arguments of its event's reflected parameter types, every recorded callback and bound handler is called once on a fresh thread; a handler connected by one of them (a `Died` inside `CharacterAdded`) is called the next round, and the rounds stop when one has nothing to call. An `Instance` parameter gets the staged instance of its class, or for an abstract class the first staged one that is one, in order the character's `Right Leg`, the character, its Humanoid, the player: so `BasePart.Touched`'s hit is the leg, whose Parent has a Humanoid, as for the touch such a handler is written for. Any other type gets what an unemulated method returning it answers ("Unemulated methods": a fresh `InputObject`, `false`, `0`, `""`); a `Tuple` ends the arguments. Callbacks' parameters are not in the dump, so their arguments are Roblox's API reference's (`OnServerInvoke` the player, `ProcessReceipt` a receipt `{PurchaseId, PlayerId, ProductId = 0, PlaceIdWherePurchased, CurrencySpent = 0, CurrencyType, ProductPurchaseChannel}`).
+
+A handler that never returns does not hold the run: one that yields is left waiting when the pass ends, one that never yields stops at the script timeout. Every line written during the pass carries `coverage`, and so does the harness's failure when it was still waiting at the end of the frames and failed in the pass; the summary's `coverage` lists what was called how ([cli.md](cli.md#the-summary)). Not called: a handler a script hands a method other than those three. A ConnectParallel handler's run is not seen, so the pass calls it even when it ran.
+
 ## Scheduler, timing, and guards (`src/scheduler.rs`, `src/watchdog.rs`)
 
 ### Frame phase order
