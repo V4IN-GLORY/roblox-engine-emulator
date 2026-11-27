@@ -213,11 +213,8 @@ end
     assert_eq!(
         summary["unemulated"],
         json!([
-            { "member": "StarterGui.SetCoreGuiEnabled", "count": 2, "first": at(6) },
-            { "member": "ContextActionService.BindAction", "count": 1, "first": at(8) },
             { "member": "Humanoid.ChangeState", "count": 1, "first": at(3) },
             { "member": "Humanoid.MoveTo", "count": 1, "first": at(4) },
-            { "member": "MarketplaceService.PromptProductPurchase", "count": 1, "first": at(9) },
         ])
     );
 }
@@ -308,7 +305,6 @@ fn a_loopback_run_lists_both_sides() {
 		local Humanoid = Instance.new("Humanoid")
 		Humanoid:TakeDamage(1)
 		Humanoid:TakeDamage(2)
-		game:GetService("StarterGui"):SetCore("TopbarEnabled", false)
 	end,
 }
 "#,
@@ -323,11 +319,10 @@ fn a_loopback_run_lists_both_sides() {
         .filter(|line| line["kind"] == "missing" || line["kind"] == "stubbed")
         .map(|line| format!("{} {} {}", line["side"].as_str().unwrap(), line["kind"].as_str().unwrap(), line["message"].as_str().unwrap()))
         .collect();
-    assert_eq!(sides, ["server stubbed Humanoid.TakeDamage is not emulated", "client stubbed Humanoid.TakeDamage is not emulated", "client missing StarterGui.SetCore is not emulated"]);
+    assert_eq!(sides, ["server stubbed Humanoid.TakeDamage is not emulated", "client stubbed Humanoid.TakeDamage is not emulated"]);
     let list = summary["unemulated"].as_array().unwrap();
     assert_eq!(list[0]["member"], "Humanoid.TakeDamage");
     assert_eq!(list[0]["count"], 3);
-    assert_eq!(list[1], json!({ "member": "StarterGui.SetCore", "count": 1, "first": "ReplicatedStorage.RURFixtures.unemulated:9" }));
 }
 
 /// Stand-ins for what a client fetches from the web (another account's name, an avatar, a badge) and a setting that is not
@@ -354,11 +349,9 @@ end
     assert_eq!(
         summary["unemulated"],
         json!([
-            { "member": "BadgeService.GetBadgeInfoAsync", "count": 1, "first": at(9) },
             { "member": "Players.CreateHumanoidModelFromUserId", "count": 1, "first": at(4) },
             { "member": "Players.GetHumanoidDescriptionFromUserId", "count": 1, "first": at(3) },
             { "member": "Players.GetNameFromUserIdAsync", "count": 1, "first": at(5) },
-            { "member": "TeleportService.SetTeleportSetting", "count": 1, "first": at(7) },
         ])
     );
 }

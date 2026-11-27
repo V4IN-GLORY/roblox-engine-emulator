@@ -1,0 +1,5 @@
+local UserService = game:GetService("UserService")
+local Infos = UserService:GetUserInfosByUserIdsAsync({ 1, 2 })
+assert(#Infos == 2 and Infos[1].Username == "Roblox")
+local User = UserService:GetUserFromGlobalUserIdAsync(1)
+assert(User ~= nil)

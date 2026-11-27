@@ -1,0 +1,32 @@
+local SoundService = game:GetService("SoundService")
+
+local Sound = Instance.new("Sound")
+SoundService:PlayLocalSound(Sound)
+
+local Kind, Target = SoundService:GetListener()
+assert(Kind == Enum.ListenerType.Camera and Target == nil)
+SoundService:SetListener(Enum.ListenerType.CFrame, CFrame.new(0, 5, 0))
+local NewKind, NewTarget = SoundService:GetListener()
+assert(NewKind == Enum.ListenerType.CFrame and typeof(NewTarget) == "CFrame")
+SoundService:SetListener(Enum.ListenerType.ObjectPosition, Instance.new("Part"))
+
+local Player = Instance.new("AudioPlayer")
+Player:Play()
+assert(Player.IsPlaying)
+Player:Stop()
+assert(not Player.IsPlaying)
+
+local Cancelled = Player:Play(SoundService:GetMixerTime() + 0.2)
+assert(Player:Cancel(Cancelled) == true)
+assert(Player:Cancel(Cancelled) == false)
+local Scheduled = Player:Play(SoundService:GetMixerTime() + 0.2)
+assert(type(Scheduled) == "number" and not Player.IsPlaying)
+task.wait(0.4)
+assert(Player.IsPlaying)
+assert(Player:Cancel(Scheduled) == false)
+
+local Emitter = Instance.new("AudioEmitter")
+Emitter:SetDistanceAttenuation({ [0] = 1, [50] = 0 })
+assert(Emitter:GetDistanceAttenuation()[0] == 1)
+Emitter:SetDistanceAttenuation(nil)
+assert(next(Emitter:GetDistanceAttenuation()) == nil)

@@ -502,11 +502,11 @@ fn a_client_keeps_its_stubs() {
         RunContext::Client,
         r#"
         local RunService = game:GetService("RunService")
-        print("client", RunService:IsClient(), RunService:IsServer(), game.Players.LocalPlayer.Name, select('#', game:GetService("DataStoreService"):GetDataStore("X")))
+        print("client", RunService:IsClient(), RunService:IsServer(), game.Players.LocalPlayer.Name, pcall(game:GetService("DataStoreService").GetDataStore, game:GetService("DataStoreService"), "X"))
         "#,
         0.1,
     );
-    assert!(has(&lines, "print: client true false Player 1"), "{lines:?}");
+    assert!(has(&lines, "print: client true false Player false DataStore can't be accessed from client"), "{lines:?}");
 }
 
 /// EncodingService answers buffers on a playing client as on a server, with the client's errors (measured in a 0.747
@@ -696,9 +696,10 @@ fn a_servers_message_out_is_queued_with_a_context_argument() {
 
 /// Offline a server makes the default R6 rig for Players:CreateHumanoidModelFromDescription(Async) with an R6 rig type (a
 /// root part, a torso, a head and four limbs joined by the standard Motor6Ds, PrimaryPart the root), R15 a bare Model with
-/// a Humanoid; InsertService:LoadAsset raises after a frame as a failed load does; Player:LoadCharacterAsync is a no-op.
+/// a Humanoid; InsertService:LoadAsset and AssetService:LoadAssetAsync answer a Model, as a live game loads one
+/// (LoadAssetVersion raises the capture's deprecation error); Player:LoadCharacterAsync is a no-op.
 #[test]
-fn a_server_makes_r6_rigs_raises_on_load_asset_and_loads_no_character() {
+fn a_server_makes_r6_rigs_loads_assets_and_loads_no_character() {
     let lines = run(
         RunContext::Server,
         r#"
@@ -735,9 +736,9 @@ fn a_server_makes_r6_rigs_raises_on_load_asset_and_loads_no_character() {
     assert!(has(&lines, "print: r15 1 true"), "{lines:?}");
     // (an Instance parameter given another value: arg_checks, as every one in the Studio 0.748 capture, validator/probe/expected)
     assert!(has_error(&lines, "cast false", "Unable to cast value to Object"), "{lines:?}");
-    assert!(has(&lines, "print: load false InsertService:LoadAsset: asset 123 cannot be loaded offline true"), "{lines:?}");
-    assert!(has(&lines, "print: version false InsertService:LoadAssetVersion: asset version 456 cannot be loaded offline true"), "{lines:?}");
-    assert!(has(&lines, "print: async false AssetService:LoadAssetAsync: asset 789 cannot be loaded offline true"), "{lines:?}");
+    assert!(has(&lines, "print: load true Model true"), "{lines:?}");
+    assert!(has(&lines, "print: version false Get Assets by AssetVersionId is deprecated. Please use Get Assets by Asset VersionNumber. false"), "{lines:?}");
+    assert!(has(&lines, "print: async true Model true"), "{lines:?}");
     assert!(has(&lines, "print: character 0 nil"), "{lines:?}");
 }
 

@@ -104,8 +104,7 @@ const DEFAULT_LINES: [&str; 29] = [
     r#"print owns false false false false false"#,
     r#"stubbed MarketplaceService.PlayerOwnsAssetAsync is not emulated"#,
     r#"print owns async false"#,
-    r#"stubbed MarketplaceService.GetUserSubscriptionStatusAsync is not emulated"#,
-    r#"print subscription []"#,
+    r#"print subscription {"IsRenewing":false,"IsSubscribed":false}"#,
     r#"print badges false false"#,
     r#"stubbed BadgeService.CheckUserBadgesAsync is not emulated"#,
     r#"print badge list []"#,
@@ -117,7 +116,7 @@ const DEFAULT_LINES: [&str; 29] = [
     r#"print friend page []"#,
     r#"print names Player John Doe 1 1"#,
     r#"print infos [{"Id":1,"Username":"Player","HasVerifiedBadge":false,"DisplayName":"Player"},{"Id":2,"Username":"John Doe","HasVerifiedBadge":false,"DisplayName":"John Doe"}]"#,
-    r#"print blocked null"#,
+    r#"print blocked []"#,
     r#"print player calls false 0.05"#,
     r#"print @done"#,
 ];

@@ -1,0 +1,30 @@
+local Sheet = Instance.new("StyleSheet")
+local ParentSheet = Instance.new("StyleSheet")
+local Rule = Instance.new("StyleRule")
+local Query = Instance.new("StyleQuery")
+
+Rule:SetProperty("BackgroundTransparency", 0.5)
+assert(Rule:GetProperty("BackgroundTransparency") == 0.5)
+Rule:SetProperties({ TextSize = 16 })
+assert(Rule:GetProperties().TextSize == 16)
+Rule:SetProperty("TextSize", nil)
+assert(Rule:GetProperty("TextSize") == nil)
+
+Query:SetCondition("MaxSize", Vector2.new(600, 400))
+assert(Query:GetCondition("MaxSize") == Vector2.new(600, 400))
+Query:SetConditions({ MinSize = Vector2.zero })
+assert(Query:GetConditions().MinSize == Vector2.zero)
+
+Rule.Parent = Sheet
+assert(#Sheet:GetStyleRules() == 1)
+local Second = Instance.new("StyleRule")
+Sheet:InsertStyleRule(Second)
+assert(#Sheet:GetStyleRules() == 2 and Second.Priority > Rule.Priority)
+Sheet:SetStyleRules({ Second })
+assert(#Sheet:GetStyleRules() == 1 and Rule.Parent == nil)
+
+Sheet:SetDerives({ ParentSheet })
+assert(Sheet:GetDerives()[1] == ParentSheet)
+assert(Sheet:FindFirstChildOfClass("StyleDerive").StyleSheet == ParentSheet)
+Sheet:SetDerives({})
+assert(#Sheet:GetDerives() == 0)

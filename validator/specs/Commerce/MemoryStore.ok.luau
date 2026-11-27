@@ -1,0 +1,5 @@
+local MemoryStoreService = game:GetService("MemoryStoreService")
+local Map = MemoryStoreService:GetSortedMap("Leaderboard")
+Map:SetAsync("user_1", 250, 60, 250)
+local Value, SortKey = Map:GetAsync("user_1")
+assert(Value == 250 and SortKey == 250)

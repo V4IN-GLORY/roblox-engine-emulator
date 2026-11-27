@@ -263,7 +263,7 @@ fn percent_decode(text: &str) -> String {
 /// and `Stack End`, a line per frame of the script's own code (`Script '<chunk>', Line <n> - function <name>`, or no
 /// function for an anonymous one), each indented four spaces. Measured in a playing client (Studio 0.744,
 /// tools/parity/probes/logservice_text.luau): `task.spawn(error, "x")` has no frame between the two. `trace` is the
-/// Luau traceback the scheduler took (`<chunk>:<line>[ function <name>]` a line); the engine's own Luau (`rur.*`) is
+/// Luau traceback the scheduler took (`<chunk>:<line>[ function <name>]` a line); the engine's own Luau (`rur.*`, `ree.*`) is
 /// Roblox's C++ and has no frame. (ree compiles scripts with inlining, so a function inlined into its caller has no frame
 /// of its own; Studio's playing client keeps one per call.)
 fn client_error_text(message: &str, trace: &str) -> String {
@@ -286,7 +286,7 @@ pub(crate) fn stack_frames(trace: &str) -> Vec<String> {
             None => (line, None),
         };
         let Some((chunk, number)) = place.rsplit_once(':') else { continue };
-        if chunk.starts_with("rur.") || chunk.starts_with('[') || number.parse::<u32>().is_err() {
+        if chunk.starts_with("rur.") || chunk.starts_with("ree.") || chunk.starts_with('[') || number.parse::<u32>().is_err() {
             continue;
         }
         frames.push(match function {
@@ -307,7 +307,7 @@ pub(crate) fn script_error_trace(trace: &str) -> String {
             None => (line, None),
         };
         let Some((chunk, number)) = place.rsplit_once(':') else { continue };
-        if chunk.starts_with("rur.") || chunk.starts_with('[') || number.parse::<u32>().is_err() {
+        if chunk.starts_with("rur.") || chunk.starts_with("ree.") || chunk.starts_with('[') || number.parse::<u32>().is_err() {
             continue;
         }
         match function {

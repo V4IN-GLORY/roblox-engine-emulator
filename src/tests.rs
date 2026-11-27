@@ -12788,7 +12788,7 @@ fn methods_new_in_0_747_report_themselves_as_not_emulated() {
         &engine,
         r#"
         print(typeof(game:GetService("CollectionService"):GetCollections(Instance.new("Part"))))
-        print(typeof(game:GetService("RunService"):BindToSimulationParallel(function() end, Enum.StepFrequency.Hz60, 1)))
+        print(pcall(game:GetService("RunService").BindToSimulationParallel, game:GetService("RunService"), function() end, Enum.StepFrequency.Hz60, 1))
         local Emitter = Instance.new("ParticleEmitter2D")
         print(Emitter:Emit(3), Emitter:Clear())
         print(Instance.new("Sound"):GetPlaybackState() == "", Instance.new("TextDocument"):ReadAsync() == "")
@@ -12801,8 +12801,7 @@ fn methods_new_in_0_747_report_themselves_as_not_emulated() {
         [
             "stubbed: CollectionService.GetCollections is not emulated",
             "print: table",
-            "stubbed: RunService.BindToSimulationParallel is not emulated",
-            "print: RBXScriptConnection",
+            "print: false RunService:BindToSimulationParallel: A module script may only be used if this instantiation was required by a script associated with an Actor.",
             "stubbed: ParticleEmitter2D.Emit is not emulated",
             "stubbed: ParticleEmitter2D.Clear is not emulated",
             "print: nil",
@@ -15362,13 +15361,13 @@ fn unemulated_methods_answer_a_default_of_their_return_type() {
 
         local Answered = nil
         task.spawn(function()
-            Answered = game:GetService("AssetService"):GetBundleDetailsAsync(1)
+            Answered = game:GetService("AssetService"):GetAssetIdsForPackageAsync(1)
         end)
         assert(Answered == nil)
         task.wait()
         assert(type(Answered) == "table" and next(Answered) == nil)
         Answered.Items = {}
-        assert(next(game:GetService("AssetService"):GetBundleDetailsAsync(1)) == nil)
+        assert(next(game:GetService("AssetService"):GetAssetIdsForPackageAsync(1)) == nil)
         print("done")
         "##,
     );
@@ -15384,7 +15383,7 @@ fn unemulated_methods_answer_a_default_of_their_return_type() {
             "stubbed: VRService.GetTouchpadMode is not emulated",
             "stubbed: StyleRule.GetProperty is not emulated",
             "stubbed: RunService.BindToSimulation is not emulated",
-            "stubbed: AssetService.GetBundleDetailsAsync is not emulated",
+            "stubbed: AssetService.GetAssetIdsForPackageAsync is not emulated",
         ],
         "{output:?}"
     );
