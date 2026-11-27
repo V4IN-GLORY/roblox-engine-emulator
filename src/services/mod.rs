@@ -947,6 +947,14 @@ fn install_players(engine: &Rc<Engine>, behaviors: &mut Behaviors, reflection: &
             }));
         }
     }
+    // Player.User: domain-scoped User identity matching the player's UserId and the game's GameId
+    if let (Some(player_class), Some(user_prop)) = (class(reflection, "Player"), name(reflection, "User")) {
+        behaviors.add_getter(player_class, user_prop, getter(|lua, engine, id| {
+            let user_id = engine.state.borrow().dom.number(id, K::UserId as NameId).unwrap_or(0.0) as i64;
+            let domain_id = engine.options.profile.game.game_id() as i64;
+            Ok(super::lua::types::make_user(lua, super::lua::types::LUser { id: user_id, domain_type: Str::from("Experience"), domain_id })?)
+        }));
+    }
     // Player methods and the other script-data stubs are Luau (lua/services.luau)
 }
 

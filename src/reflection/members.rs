@@ -12,7 +12,7 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use serde::de::{self, Deserialize, Deserializer, IgnoredAny, MapAccess, SeqAccess, Visitor};
 
 use super::{
-    BEHAVIOR_METHODS, BEHAVIOR_PROPERTIES, ClassId, ClassInfo, DumpEnumItem, EnumId, EnumInfo, EnumItemId, EnumItemInfo, ITEM_ALIASES, NameId,
+    BEHAVIOR_PROPERTIES, ClassId, ClassInfo, DumpEnumItem, EnumId, EnumInfo, EnumItemId, EnumItemInfo, ITEM_ALIASES, NameId,
     PropertyInfo, Reflection, ScriptType, engine_type, list, text,
 };
 use crate::value::Value;
@@ -21,15 +21,17 @@ use crate::value::Value;
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum MemberOrigin {
-    /// Studio's ReflectionService, as `data/reflection.json` records it: every field this module describes.
+    /// Studio's ReflectionService, as `data/reflection.json` records it: every field this module describes. For a class
+    /// it leaves out (Player, UserGameSettings), Roblox's Creator Docs in the same format (`data/docs-supplement.json`;
+    /// [`ClassInfo::reflected`] is false for those).
     Dump,
-    /// rbx-dom's database, for a class the dump does not list (Player, UserGameSettings): a property's type and
-    /// [`DomProperty`] data, but no display data or permits.
+    /// rbx-dom's database, for what neither lists (settings().Physics, a property of Player no game script reads): a
+    /// property's type and [`DomProperty`] data, but no display data or permits.
     RbxDom,
-    /// The engine's own lists: a member the dump leaves out that the engine has (measured, or documented by Roblox), such as
-    /// Player's methods (Kick, GetMouse, LoadCharacter), scripts' Source and BindableFunction.OnInvoke. Its name and class are
-    /// known, and a property's type; a method's, event's or callback's parameters and types are not (ree records none: its
-    /// `parameters` are empty and its `returns` is `None`), and it has no permits or display data.
+    /// The engine's own lists: a member neither lists that the engine has (measured, or documented by Roblox), such as
+    /// scripts' Source and BindableFunction.OnInvoke. Its name and class are known, and a property's type; a method's,
+    /// event's or callback's parameters and types are not (ree records none: its `parameters` are empty and its `returns`
+    /// is `None`), and it has no permits or display data.
     Engine,
 }
 
@@ -192,7 +194,7 @@ pub struct ParameterInfo {
     /// [`Reflection::parameter_default`] decodes it.
     pub default: Option<serde_json::Value>,
     /// Whether the parameter takes `nil` or may be omitted: `true` when the dump gives it a default or a `?` script type, or
-    /// Roblox's Creator Docs mark it optional (`data/optional-parameters.json`).
+    /// Roblox's Creator Docs mark it optional (`data/docs-supplement.json` `optionalParameters`).
     pub optional: bool,
 }
 
@@ -555,36 +557,45 @@ fn by_name(list: Option<&serde_json::Value>) -> FxHashMap<&str, &serde_json::Val
     found
 }
 
-#[derive(serde::Deserialize)]
-struct OptionalParametersFile {
-    parameters: Vec<(String, String, usize)>,
+/// `data/docs-supplement.json` (tools/docs-supplement.mjs) as the initial load reads it.
+#[derive(Default, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct DocsSupplementLoad {
+    pub classes: Vec<DumpClass>,
+    /// (declaring class, property, capability)
+    pub write_capabilities: Vec<(String, String, String)>,
 }
 
-fn optional_parameters() -> FxHashSet<(String, String, usize)> {
-    serde_json::from_slice::<OptionalParametersFile>(crate::data::OPTIONAL_PARAMETERS)
-        .map(|file| file.parameters.into_iter().collect())
-        .unwrap_or_default()
+/// `data/docs-supplement.json` as the member info is built from it.
+#[derive(Default, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DocsSupplementMembers {
+    classes: Vec<MemberClass>,
+    /// (class, method, 1-based parameter)
+    optional_parameters: FxHashSet<(String, String, usize)>,
 }
 
 impl Members {
-    /// The members of every class of `reflection`, from the dump it was read from: its own lists give each class's
-    /// members and order (then the methods and properties it has only through behaviours), the dump's entry the rest (an
-    /// engine member has none). The load made class n of the dump's n-th entry with a name, so entries are matched by place.
+    /// The members of every class of `reflection`, from the dump it was read from and the docs supplement: its own lists
+    /// give each class's members and order (then the properties it has only through behaviours), its entry the rest (an
+    /// engine member has none). The load made class n of the dump's n-th entry with a name, so those are matched by place,
+    /// the supplement's by name.
     #[inline(never)]
     pub(super) fn build(reflection: &Reflection, dump: &[u8]) -> Members {
         let classes = serde_json::from_slice::<MemberDump>(dump).map(|dump| dump.classes).unwrap_or_default();
         let entries: Vec<&MemberClass> = classes.iter().filter(|class| text(class.name.as_ref()).is_some()).collect();
-        let extra_optional = optional_parameters();
+        let docs = serde_json::from_slice::<DocsSupplementMembers>(crate::data::DOCS_SUPPLEMENT).unwrap_or_default();
+        let documented: FxHashMap<&str, &MemberClass> = docs.classes.iter().filter_map(|class| Some((text(class.name.as_ref())?, class))).collect();
         let mut members = Members::default();
         for class in &reflection.classes {
-            let entry = if class.reflected { entries.get(class.id as usize).copied() } else { None };
+            let entry = if class.reflected { entries.get(class.id as usize).copied() } else { documented.get(&*class.name).copied() };
             let parameters = |member: Option<&serde_json::Value>, method_name: Option<&str>| -> Box<[ParameterInfo]> {
                 list(member.and_then(|member| member.get("parameters")))
                     .iter()
                     .enumerate()
                     .map(|(index, param)| {
                         let extra = method_name.is_some_and(|method| {
-                            extra_optional.contains(&(class.name.to_string(), method.to_string(), index + 1))
+                            docs.optional_parameters.contains(&(class.name.to_string(), method.to_string(), index + 1))
                         });
                         ParameterInfo::from_json(param, extra)
                     })
@@ -597,13 +608,7 @@ impl Members {
 
             let dumped = by_name(entry.and_then(|entry| entry.methods.as_ref()));
             own[METHODS].0 = members.methods.len() as u32;
-            let behaviour_methods = BEHAVIOR_METHODS
-                .iter()
-                .filter(|(owner, _)| *owner == &*class.name)
-                .flat_map(|(_, names)| names.iter())
-                .filter_map(|name| reflection.name_id(name))
-                .filter(|name| !class.own_methods.contains(name));
-            for name in class.own_methods.iter().copied().chain(behaviour_methods) {
+            for &name in &class.own_methods {
                 let method_name = reflection.name(name);
                 let member = dumped.get(method_name).copied();
                 members.declared[METHODS].entry((class.id, name)).or_insert(members.methods.len() as u32);
@@ -674,6 +679,7 @@ impl Members {
                     instance_type: None,
                     display: Box::new([]),
                     permits: Permits::default(),
+                    write_capability: None,
                     origin: MemberOrigin::Engine,
                 });
             }
@@ -2457,18 +2463,16 @@ impl<'de> Deserialize<'de> for MemberDump {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::reflection::{BEHAVIOR_ONLY_NAMES, K};
+    use crate::reflection::K;
 
-    /// The members `class` has only through the engine's behaviours, by the lists ([`BEHAVIOR_METHODS`],
-    /// [`BEHAVIOR_PROPERTIES`]): (kind, name), for the class and its subclasses.
+    /// The properties `class` has only through the engine's behaviours, by their list ([`BEHAVIOR_PROPERTIES`]), for the
+    /// class and its subclasses.
     fn behaviour_only(reflection: &Reflection, class: &ClassInfo) -> Vec<(MemberKind, NameId)> {
-        let methods = BEHAVIOR_METHODS.iter().flat_map(|(owner, names)| names.iter().map(move |name| (*owner, MemberKind::Method, *name)));
-        let properties = BEHAVIOR_PROPERTIES.iter().map(|&(owner, name, ..)| (owner, MemberKind::Property, name));
-        methods
-            .chain(properties)
-            .filter(|&(owner, ..)| reflection.is_a(class.id, owner))
-            .map(|(_, kind, name)| (kind, reflection.name_id(name).unwrap()))
-            .filter(|&(kind, name)| if kind == MemberKind::Method { !class.methods.contains(&name) } else { !class.properties.contains_key(&name) })
+        BEHAVIOR_PROPERTIES
+            .iter()
+            .filter(|&&(owner, ..)| reflection.is_a(class.id, owner))
+            .map(|&(_, name, ..)| (MemberKind::Property, reflection.name_id(name).unwrap()))
+            .filter(|&(_, name)| !class.properties.contains_key(&name))
             .collect()
     }
 
@@ -2498,15 +2502,26 @@ mod tests {
         assert_eq!(reflection.class_property(model, name("PrimaryPart")).unwrap().instance_type.as_deref(), Some("BasePart"));
         let absolute = reflection.class_property(reflection.class_id("Frame").unwrap(), K::AbsoluteSize as NameId).unwrap();
         assert!(absolute.permits.allows("Read") && !absolute.permits.allows("Write") && absolute.read_only);
-        // every property of the dump has a category; the others have none
+        // every property of the dump and of the docs supplement has a category; the others have none
         for property in &reflection.properties {
             assert_eq!(property.category().is_some(), property.origin == MemberOrigin::Dump, "{}", reflection.name(property.name));
         }
         let deprecated = reflection.properties.iter().filter(|property| property.is_deprecated()).count();
-        assert_eq!(deprecated, 135);
-        // rbx-dom's classes and the engine's own properties say where they come from
+        assert_eq!(deprecated, 141);
+        // a class the docs supplement adds reads as the dump's do
         let player = reflection.class_id("Player").unwrap();
-        assert_eq!(reflection.class_property(player, K::UserId as NameId).unwrap().origin, MemberOrigin::RbxDom);
+        let user_id = reflection.class_property(player, K::UserId as NameId).unwrap();
+        assert_eq!((user_id.origin, user_id.permits.get("Read"), reflection.class(player).reflected), (MemberOrigin::Dump, Some("Players"), false));
+        // rbx-dom's classes and the engine's own properties say where they come from
+        let physics = reflection.class_id("PhysicsSettings").unwrap();
+        assert_eq!(reflection.class_property(physics, name("AreAnchorsShown")).unwrap().origin, MemberOrigin::RbxDom);
+        // a write capability is on a property the permits give no Write
+        assert_eq!(user_id.write_capability, None);
+        let mesh = reflection.class_property(reflection.class_id("MeshPart").unwrap(), name("MeshId")).unwrap();
+        assert_eq!(mesh.write_capability.as_deref(), Some("NotAccessible"));
+        for property in reflection.properties.iter().filter(|property| property.write_capability.is_some()) {
+            assert!(property.read_only && !property.permits.allows("Write"), "{}", reflection.name(property.name));
+        }
         let workspace = reflection.class_id("Workspace").unwrap();
         let streaming = reflection.class_property(workspace, name("StreamingMinRadius")).unwrap();
         assert_eq!((streaming.origin, streaming.category()), (MemberOrigin::Engine, None));
@@ -2548,13 +2563,13 @@ mod tests {
         assert_eq!(raycast.parameters[2].default.as_ref().and_then(|value| value.get("$t")).and_then(|kind| kind.as_str()), Some("RaycastParams"));
         let outfits = reflection.class_method(reflection.class_id("AvatarEditorService").unwrap(), reflection.name_id("GetOutfitsAsync").unwrap()).unwrap();
         assert!(outfits.parameters.iter().any(|parameter| parameter.default_text().as_deref() == Some("Enum.OutfitType.All")));
-        // a method the engine adds (the dump does not list UserGameSettings) has no signature
-        let settings = reflection.class_id("UserGameSettings").unwrap();
-        let in_studio = reflection.class_method(settings, reflection.name_id("InStudioMode").unwrap()).unwrap();
+        // a method the engine adds (neither the dump nor the docs lists settings().Rendering's) has no signature
+        let settings = reflection.class_id("RenderSettings").unwrap();
+        let in_studio = reflection.class_method(settings, reflection.name_id("GetMaxQualityLevel").unwrap()).unwrap();
         assert_eq!((in_studio.origin, in_studio.returns.is_none(), in_studio.parameters.len()), (MemberOrigin::Engine, true, 0));
         // a method's parameters' types name classes
         let deprecated = reflection.all_classes().map(|class| reflection.own_methods(class.id).iter().filter(|method| method.is_deprecated()).count()).sum::<usize>();
-        assert_eq!(deprecated, 223);
+        assert_eq!(deprecated, 253);
     }
 
     #[test]
@@ -2578,9 +2593,13 @@ mod tests {
         assert_eq!((reflection.class(changed.owner).name.as_ref(), names(&changed.parameters)), ("BoolValue", vec![("value", "boolean", None)]));
         let changed = reflection.class_event(part, K::Changed as NameId).unwrap();
         assert_eq!((reflection.class(changed.owner).name.as_ref(), &*changed.parameters[0].name), ("Object", "property"));
-        // the engine's own events (Player's) and callbacks have no signature
+        // a docs supplement event, with its signature
         let player = reflection.class_id("Player").unwrap();
-        assert_eq!(reflection.class_event(player, reflection.name_id("CharacterAdded").unwrap()).unwrap().origin, MemberOrigin::Engine);
+        let spawned = reflection.class_event(player, reflection.name_id("CharacterAdded").unwrap()).unwrap();
+        assert_eq!((spawned.origin, names(&spawned.parameters)), (MemberOrigin::Dump, vec![("character", "Instance", None)]));
+        // the engine's own events (settings().Studio's) and callbacks have no signature
+        let studio = reflection.class_id("Studio").unwrap();
+        assert_eq!(reflection.class_event(studio, reflection.name_id("ThemeChanged").unwrap()).unwrap().origin, MemberOrigin::Engine);
         let invoke = reflection.class_callback(reflection.class_id("BindableFunction").unwrap(), K::OnInvoke as NameId).unwrap();
         assert_eq!((invoke.origin, invoke.returns.is_none()), (MemberOrigin::Engine, true));
     }
@@ -2639,13 +2658,9 @@ mod tests {
     /// reflection lacks, in the client, server and edit run contexts, a property read-only where it has no setter.
     #[test]
     fn behaviour_only_members_are_the_engines_behaviours() {
-        let mut listed: Vec<(String, &str, String, bool)> = BEHAVIOR_METHODS
-            .iter()
-            .flat_map(|(class, names)| names.iter().map(move |name| (class.to_string(), "method", name.to_string(), false)))
-            .chain(BEHAVIOR_PROPERTIES.iter().map(|&(class, name, _, _, read_only, _)| (class.to_string(), "property", name.to_string(), read_only)))
-            .collect();
+        let mut listed: Vec<(String, &str, String, bool)> =
+            BEHAVIOR_PROPERTIES.iter().map(|&(class, name, _, _, read_only, _)| (class.to_string(), "property", name.to_string(), read_only)).collect();
         crate::sort::ord(&mut listed);
-        assert_eq!(listed.iter().filter(|entry| entry.1 == "method").count(), BEHAVIOR_ONLY_NAMES.len());
         for (mode, context) in [("play", crate::RunContext::Client), ("play", crate::RunContext::Server), ("edit", crate::RunContext::Edit)] {
             let engine = crate::Engine::new(crate::Options { mode: mode.into(), run_context: context, ..crate::Options::default() }).unwrap();
             let lua = mlua::Lua::new();
@@ -2671,12 +2686,6 @@ mod tests {
         }
         // the metadata finds them, as the engine's members with no recorded signature
         let reflection = Reflection::shared().unwrap();
-        let Some(ReflectedMember::Method(kick)) = reflection.member_by_name("Player", "Kick") else { panic!("Player.Kick") };
-        assert_eq!((kick.origin, kick.parameters.len(), kick.returns.is_none(), reflection.class(kick.owner).name.as_ref()), (MemberOrigin::Engine, 0, true, "Player"));
-        let player = reflection.class_id("Player").unwrap();
-        let own: Vec<&str> = reflection.own_methods(player).iter().map(|method| reflection.name(method.name)).collect();
-        assert!(BEHAVIOR_ONLY_NAMES.iter().all(|name| own.contains(name)), "{own:?}");
-        assert!(reflection.members(player).any(|member| reflection.name(member.name()) == "LoadCharacter"));
         let Some(ReflectedMember::Property(source)) = reflection.member_by_name("ModuleScript", "Source") else { panic!("ModuleScript.Source") };
         assert_eq!((source.origin, &*source.script_type_name, source.read_only, source.scriptable), (MemberOrigin::Engine, "string", false, true));
         assert_eq!(reflection.class(source.owner).name.as_ref(), "LuaSourceContainer");
@@ -2694,7 +2703,7 @@ mod tests {
         let Some(ReflectedMember::Property(label)) = reflection.member_by_name("TextLabel", "LocalizedText") else { panic!("TextLabel.LocalizedText") };
         assert_eq!((label.origin, label.category()), (MemberOrigin::Dump, Some("Data")));
         // (the engine's own lookups are as they were: no reflected member of these names)
-        assert!(reflection.class_property(module, K::Source as NameId).is_none() && !reflection.class(player).methods.contains(&kick.name));
+        assert!(reflection.class_property(module, K::Source as NameId).is_none());
     }
 
     #[test]
@@ -2766,12 +2775,18 @@ mod tests {
             assert_eq!(read.own_events(class.id), reflection.own_events(class.id));
             assert_eq!(read.own_callbacks(class.id), reflection.own_callbacks(class.id));
         }
-        // optional flag merges the dump's defaults/`?` types with Creator Docs' optional-parameters.json
+        // optional flag merges the dump's defaults/`?` types with the docs supplement's optionalParameters
         let method = |class: &str, name: &str| reflection.class_method(reflection.class_id(class).unwrap(), reflection.name_id(name).unwrap()).unwrap();
         assert!(method("BasePart", "SetNetworkOwner").parameters[0].optional);
         assert!(method("AudioPlayer", "Play").parameters[0].optional);
         assert!(method("Instance", "FindFirstChild").parameters[1].optional);
         assert!(!method("Humanoid", "ReplaceBodyPartR15").parameters[1].optional);
+        // the supplement's methods: the docs' defaults, and the empty string they leave out
+        assert_eq!(method("Player", "Kick").parameters[0].default_text().as_deref(), Some("\"\""));
+        assert!(method("Player", "Move").parameters[1].optional && !method("Player", "Move").parameters[0].optional);
+        // the supplement leaves a class the dump lists as the dump has it
+        assert!(reflection.class_by_name("Players").unwrap().reflected);
+        assert_eq!(method("Players", "GetPlayers").permits.get("Call"), Some("Players"));
     }
 
     /// A class entry as a test compares the readers: its name, its events', methods' and callbacks' names, and the rest.

@@ -458,6 +458,12 @@ pub fn assign(lua: &Lua, engine: &Rc<Engine>, id: InstanceId, key: &LuaValue, va
             return Ok(());
         }
         Member::Property { property, setter, .. } => {
+            // (before a behaviour or the type check: a client names the missing capability whatever the value)
+            if let Some(property) = property
+                && let Some(capability) = engine.missing_write_capability(engine.reflection.property(property))
+            {
+                return raise(format!("The current thread cannot write '{}' (lacking capability {capability})", key_text(key)));
+            }
             if setter {
                 let setter = engine.behaviors.borrow().find_setter(&engine.reflection, class, name).cloned();
                 if let Some(setter) = setter {

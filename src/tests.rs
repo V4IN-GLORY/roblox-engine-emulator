@@ -32,6 +32,17 @@ fn start_with(options: Options) -> (Lua, Rc<Engine>) {
         })
         .unwrap();
     engine.lua.borrow().shared.as_ref().unwrap().raw_set("__setSource", set_source).unwrap();
+    // a game script cannot write Script.RunContext: play-mode tests set it through the engine
+    let e = engine.clone();
+    let set_run_context = lua
+        .create_function(move |_, (script, value): (LuaAnyUserData, LuaValue)| {
+            let id = engine_lua::raw::instance_of_ud(&script).ok_or_else(|| LuaError::runtime("Instance expected"))?;
+            let name = e.reflection.name_id("RunContext").unwrap();
+            engine_lua::instance::set_property(&e, id, name, engine_lua::convert::from_lua(&value));
+            Ok(())
+        })
+        .unwrap();
+    engine.lua.borrow().shared.as_ref().unwrap().raw_set("__setRunContext", set_run_context).unwrap();
     (lua, engine)
 }
 
@@ -975,7 +986,94 @@ fn methods_check_their_arguments_as_a_clients_reflection_casts_them() {
     );
 }
 
-/// Optional parameters from Roblox's Creator Docs (`data/optional-parameters.json`) allow `nil` / omission even when
+/// The classes `data/reflection.json` leaves out come from Roblox's Creator Docs (`data/docs-supplement.json`): Player's
+/// members are there, and its methods check their arguments and answer a value of their return type as the dump's do.
+/// `Player:Kick()` takes no message (an empty-string default the docs write as none). ree answered "IsFriendsWithAsync is
+/// not a valid member of Player".
+#[test]
+fn docs_supplement_adds_the_members_the_dump_leaves_out() {
+    let (lua, engine) = start();
+    let output = run(
+        &lua,
+        &engine,
+        r#"
+        local function Try(F, ...) local Ok, Message = pcall(F, ...) return if Ok then "ok" else tostring(Message) end
+        local Player = game:GetService("Players").LocalPlayer
+        print(typeof(Player.User), Player.HasRobloxSubscription, Player.AgeChecked)
+        print(Player:IsFriendsWithAsync(1), type(Player:GetFriendsWhoPlayedAsync()))
+        print(Try(function() Player:IsFriendsWithAsync() end), Try(function() Player:IsFriendsWithAsync("a") end))
+        print(Try(function() Player:DistanceFromCharacter() end), Try(function() Player:Move(Vector3.zero) end), Try(function() Player:Kick() end))
+        print(game:GetService("ReflectionService"):GetClass("Player"))
+        "#,
+    );
+    let prints: Vec<&String> = output.iter().filter(|line| line.starts_with("print: ")).collect();
+    assert_eq!(
+        prints,
+        [
+            "print: User false Enum.AgeCheckStatus.Unchecked",
+            "print: false table",
+            "print: Argument 1 missing or nil Unable to cast string to User",
+            "print: Argument 1 missing or nil ok ok",
+            "print: nil",
+        ],
+        "{output:?}"
+    );
+    assert!(output.contains(&"stubbed: Player.IsFriendsWithAsync is not emulated".to_string()), "{output:?}");
+}
+
+/// A property write the dump permits no game script raises the capability it lacks, whatever the value and whether the
+/// property has a behaviour of its own (BaseScript.RunContext), from `data/docs-supplement.json` `writeCapabilities`
+/// (Studio 0.748, a playing client and a server alike: validator/probe/expected, the `M w` lines). Edit mode runs plugin
+/// code, which holds PluginOrOpenCloud. ree answered "Property is read only", and wrote Player.User.
+#[test]
+fn writes_a_game_script_lacks_the_capability_for_raise_it() {
+    for (mode, run_context) in [("play", super::RunContext::Client), ("play", super::RunContext::Server), ("edit", super::RunContext::Edit)] {
+        let (lua, engine) = start_with(Options { mode: mode.into(), run_context, ..Options::default() });
+        let output = run(
+            &lua,
+            &engine,
+            r#"
+            local function Try(F) local Ok, Message = pcall(F) return if Ok then "ok" else (tostring(Message):gsub("^.-:%d+: ", "")) end
+            local Player = Instance.new("Player")
+            print(Try(function() Player.User = Player.User end))
+            print(Try(function() Instance.new("MeshPart").MeshId = {} end))
+            print(Try(function() game:GetService("HttpService").HttpEnabled = true end))
+            print(Try(function() Instance.new("Script").RunContext = Enum.RunContext.Client end))
+            print(Try(function() workspace.StreamingEnabled = true end))
+            "#,
+        );
+        let prints: Vec<&String> = output.iter().filter(|line| line.starts_with("print: ")).collect();
+        let plugin = |name: &str| {
+            if mode == "edit" { None } else { Some(format!("print: The current thread cannot write '{name}' (lacking capability PluginOrOpenCloud)")) }
+        };
+        assert_eq!(prints[0], "print: The current thread cannot write 'User' (lacking capability RobloxEngine)", "{mode}");
+        assert_eq!(prints[1], "print: The current thread cannot write 'MeshId' (lacking capability NotAccessible)", "{mode}");
+        assert_eq!(prints[2], "print: The current thread cannot write 'HttpEnabled' (lacking capability LocalUser)", "{mode}");
+        for (line, name) in [(prints[3], "RunContext"), (prints[4], "StreamingEnabled")] {
+            match plugin(name) {
+                Some(refused) => assert_eq!(line, &refused, "{mode}"),
+                None => assert!(!line.contains("lacking capability"), "{mode}: {line}"),
+            }
+        }
+    }
+}
+
+/// The dump wins wherever it has a class: the docs supplement adds only classes it lacks, never over its entry.
+#[test]
+fn the_docs_supplement_never_replaces_a_dumped_class() {
+    let own = super::Reflection::from_dump(br#"{"classes": [{"name": "Player", "methods": [{"name": "Mine"}]}], "enums": []}"#, None).unwrap();
+    let player = own.class_id("Player").unwrap();
+    assert!(own.class(player).reflected);
+    assert_eq!(own.own_methods(player).iter().map(|method| own.name(method.name)).collect::<Vec<_>>(), ["Mine"]);
+    // a class both sources list reads as the dump writes it (the docs give Model:GetBoundingBox a Tuple)
+    let reflection = super::Reflection::shared().unwrap();
+    let model = reflection.class_id("Model").unwrap();
+    let bounds = reflection.class_method(model, reflection.name_id("GetBoundingBox").unwrap()).unwrap();
+    assert_eq!(bounds.returns.as_ref().map(|returns| &*returns.script), Some("CFrame"));
+    assert!(reflection.class(model).reflected);
+}
+
+/// Optional parameters from Roblox's Creator Docs (`data/docs-supplement.json`) allow `nil` / omission even when
 /// ReflectionService leaves them unmarked (`BasePart:SetNetworkOwner(nil)`, `AudioPlayer:Play()`), while required later
 /// `Instance` parameters still raise `Argument N missing or nil` (`Humanoid:ReplaceBodyPartR15()`, measured in Studio 0.748,
 /// `validator/probe/expected/surface_server.txt`).
@@ -6870,9 +6968,7 @@ fn script_callbacks_are_assignable() {
 /// desynchronized, newest connection first.
 #[test]
 fn actors_run_their_scripts_in_a_vm_of_their_own_in_studios_order() {
-    let engine = Engine::new(Options { mode: "play".into(), ..Options::default() }).expect("engine");
-    let lua = Lua::new();
-    engine_lua::start(&lua, &engine).expect("start");
+    let (lua, engine) = start_with(Options { mode: "play".into(), ..Options::default() });
     crate::scheduler::step(&lua, &engine, Some(1.0 / 60.0)).expect("step");
     run(
         &lua,
@@ -6892,7 +6988,7 @@ fn actors_run_their_scripts_in_a_vm_of_their_own_in_studios_order() {
         Module.Source = "local Count = 0 local Actor = script:GetActor() return { Bump = function() Count += 1 return Count end, Actor = if Actor then Actor.Name else 'none' }"
         Module.Parent = Folder
         local Template = Instance.new("Script")
-        Template.RunContext = Enum.RunContext.Client
+        __setRunContext(Template, Enum.RunContext.Client)
         Template.Enabled = false
         Template.Source = [==[
             local RunService = game:GetService("RunService")
@@ -6991,8 +7087,9 @@ fn actors_run_their_scripts_in_a_vm_of_their_own_in_studios_order() {
     assert_eq!(log, expected);
 }
 
-/// Script.Source and Script.RunContext are plugin-writable in Studio and ree has no plugin boundary: a script can
-/// set them (the Actor probe builds its workers that way), and a module's new source is the one required.
+/// Script.Source and Script.RunContext are plugin-writable in Studio. Edit mode, which runs plugin code, sets both, and a
+/// module's new source is the one required; in play mode RunContext raises its capability
+/// (writes_a_game_script_lacks_the_capability_for_raise_it).
 #[test]
 fn script_source_and_run_context_are_writable() {
     assert_script(

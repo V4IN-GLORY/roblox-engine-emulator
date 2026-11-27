@@ -1544,6 +1544,9 @@ unsafe fn newindex_fast(state: *mut ffi::lua_State) -> Out {
             Write::ReadOnly(property) => {
                 let info = engine.reflection.property(property);
                 let written = arg_bytes(state, 2).and_then(|b| std::str::from_utf8(b).ok()).unwrap_or_else(|| engine.reflection.name(info.name));
+                if let Some(capability) = engine.missing_write_capability(info) {
+                    return Out::Raise(format!("The current thread cannot write '{written}' (lacking capability {capability})"), 0);
+                }
                 // Type check runs before the read-only check (Roblox Studio 0.748.0.7481526, validator/probe/expected).
                 match bridged_coerce(state, api, engine, info, written, 3) {
                     Ok(_) => Out::Raise(format!("Unable to assign property {written}. Property is read only"), 0),

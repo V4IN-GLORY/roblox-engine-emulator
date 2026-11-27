@@ -105,12 +105,13 @@ pub use reflection::{ClassId, K, NameId, Reflection};
 pub use value::{Str, Value};
 
 /// The engine's data, compiled in: Studio's ReflectionService dump (`data/reflection.json`,
-/// tools/dump-reflection.luau writes it), Creator Docs optional method parameters
-/// (`data/optional-parameters.json`, tools/optional-parameters.mjs writes it) and the Enum.Font
-/// faces (`data/font-enums.json`).
+/// tools/dump-reflection.luau writes it), Roblox Creator Docs supplement
+/// (`data/docs-supplement.json`, tools/docs-supplement.mjs writes it: missing classes, optional
+/// method parameters and property write capabilities) and the Enum.Font faces
+/// (`data/font-enums.json`).
 pub mod data {
     pub const REFLECTION: &[u8] = include_bytes!("../data/reflection.json");
-    pub const OPTIONAL_PARAMETERS: &[u8] = include_bytes!("../data/optional-parameters.json");
+    pub const DOCS_SUPPLEMENT: &[u8] = include_bytes!("../data/docs-supplement.json");
     pub const FONT_ENUMS: &[u8] = include_bytes!("../data/font-enums.json");
 }
 
@@ -1194,5 +1195,16 @@ impl Engine {
 
     pub fn class_id(&self, name: &str) -> Option<ClassId> {
         self.reflection.class_id(name)
+    }
+
+    /// The capability this engine's scripts lack to write the property, if any ([`reflection::PropertyInfo::write_capability`]).
+    /// A game script lacks every one (validator/probe/expected, Studio 0.748); edit mode runs plugin code, which holds
+    /// `Plugin` and `PluginOrOpenCloud`.
+    pub(crate) fn missing_write_capability<'a>(&self, info: &'a crate::reflection::PropertyInfo) -> Option<&'a str> {
+        let capability = info.write_capability.as_deref()?;
+        if self.options.edit_mode() && matches!(capability, "Plugin" | "PluginOrOpenCloud") {
+            return None;
+        }
+        Some(capability)
     }
 }

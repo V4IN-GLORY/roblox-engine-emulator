@@ -479,7 +479,7 @@ fn user_of(value: &LuaValue) -> Option<LUser> {
     }
 }
 
-fn make_user(lua: &Lua, user: LUser) -> LuaResult<LuaValue> {
+pub(crate) fn make_user(lua: &Lua, user: LUser) -> LuaResult<LuaValue> {
     Ok(LuaValue::UserData(lua.create_any_userdata(user)?))
 }
 

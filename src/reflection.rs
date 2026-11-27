@@ -258,6 +258,10 @@ pub struct PropertyInfo {
     pub display: DisplayData,
     /// `Read`, `Write` and `ReadParallel`, with their capabilities ([`Permits`]); none for a property the dump does not list
     pub permits: Permits,
+    /// The capability a game script lacks to write it (`data/docs-supplement.json` `writeCapabilities`):
+    /// `PluginOrOpenCloud`, `Plugin`, `RobloxEngine`, `RobloxScript`, `NotAccessible` or `LocalUser`. `None` for a
+    /// writable property and a plain read-only one.
+    pub write_capability: Option<Box<str>>,
     pub origin: MemberOrigin,
 }
 
@@ -418,21 +422,6 @@ impl std::fmt::Debug for DumpSource {
     }
 }
 
-/// Members services.luau / query.luau give behaviours that the Studio dump does not list (Player
-/// methods are not in it), interned at load so behaviours can register them ([`BEHAVIOR_METHODS`] files them).
-const BEHAVIOR_ONLY_NAMES: &[&str] = &[
-    "DistanceFromCharacter", "GetFriendsOnline", "GetJoinData", "GetMouse", "GetNetworkPing", "GetRankInGroup",
-    "GetRankInGroupAsync", "GetRoleInGroup", "GetRoleInGroupAsync", "HasAppearanceLoaded", "IsFriendsWith", "IsInGroup",
-    "IsInGroupAsync", "IsVerified", "LoadCharacter", "LoadCharacterAsync",
-    "RequestStreamAroundAsync", "Kick", "Move", "AddReplicationFocus", "RemoveReplicationFocus",
-];
-
-/// The methods a class has only through the engine's behaviours: a script calls them, and neither the dump nor rbx-dom
-/// lists them for the class. The engine finds their behaviours; the metadata lists them as [`MemberOrigin::Engine`] members,
-/// with no parameters or types (none are recorded). members.rs's tests check this list and [`BEHAVIOR_PROPERTIES`] against a
-/// started engine's behaviours in the client, server and edit run contexts.
-const BEHAVIOR_METHODS: &[(&str, &[&str])] = &[("Player", BEHAVIOR_ONLY_NAMES)];
-
 /// The properties a script reads (and writes) only through the engine's behaviours: (class, name, script type, engine type,
 /// read-only, serialized). Scripts' Source, which the dump lists for no class (its engine type unrecorded), and TextBox's
 /// LocalizedText, which the dump lists for TextLabel and TextButton only (the types and serialization are theirs).
@@ -486,49 +475,21 @@ const ITEM_ALIASES: &[(&str, &[(&str, &str)])] = &[
     ("ThreadPoolConfig", &[("PartialThread", "Auto")]),
 ];
 
-// Events of classes only rbx-dom describes (reflection.luau EventSupplement).
+// Events neither the dump nor the docs supplement lists (reflection.luau EventSupplement).
 const EVENT_SUPPLEMENT: &[(&str, &[&str])] = &[
-    (
-        "Player",
-        &[
-            "CharacterAdded",
-            "CharacterRemoving",
-            "CharacterAppearanceLoaded",
-            "Chatted",
-            "Idled",
-            "OnTeleport",
-        ],
-    ),
-    ("UserGameSettings", &["FullscreenChanged", "StudioModeChanged"]),
     // (settings().Studio's theme never changes offline: a signal that never fires; services/settings.rs)
     ("Studio", &["ThemeChanged"]),
 ];
 
-// Defaults of classes only rbx-dom describes, where it records none: a player starts neutral, on no team (Neutral true,
-// TeamColor White, measured in a 0.747 play session: services/teams.rs)
+// Defaults rbx-dom records none of: a player starts neutral, on no team (Neutral true, TeamColor White, measured in a
+// 0.747 play session: services/teams.rs)
 fn default_supplement() -> [(&'static str, &'static str, Variant); 2] {
     [("Player", "Neutral", Variant::Bool(true)), ("Player", "TeamColor", Variant::BrickColor(rbx_dom_weak::types::BrickColor::White))]
 }
 
-// Methods of classes only rbx-dom describes (it lists properties alone): UserGameSettings's, which
-// Roblox's PlayerModule calls (behaviours in lua/services.luau), and settings()' (services/settings.rs: GetMaxQualityLevel
-// answers; GetFFlag and GetFVariable are not emulated, since ree knows no flag values)
-const METHOD_SUPPLEMENT: &[(&str, &[&str])] = &[
-    (
-        "UserGameSettings",
-        &[
-            "GetCameraYInvertValue",
-            "GetOnboardingCompleted",
-            "InFullScreen",
-            "InStudioMode",
-            "SetCameraYInvertVisible",
-            "SetGamepadCameraSensitivityVisible",
-            "SetOnboardingCompleted",
-        ],
-    ),
-    ("GlobalSettings", &["GetFFlag", "GetFVariable"]),
-    ("RenderSettings", &["GetMaxQualityLevel"]),
-];
+// Methods of a class only rbx-dom describes (it lists properties alone): settings().Rendering's GetMaxQualityLevel
+// answers (services/settings.rs)
+const METHOD_SUPPLEMENT: &[(&str, &[&str])] = &[("RenderSettings", &["GetMaxQualityLevel"])];
 
 // Properties the dump leaves out: (class, name, script type, engine type or enum, scriptable, serialized). Path2D keeps its
 // control points in PropertiesSerialize, a BinaryString only files see, and a Transparency that only the engine's own
@@ -861,18 +822,21 @@ impl Reflection {
         }
         // (services port) Behaviour members the dump does not list: the Luau runtime finds
         // behaviours by string, so they need a name id to be registered and found here
-        for name in BEHAVIOR_ONLY_NAMES {
-            reflection.intern(name);
-        }
         reflection.version = dump.version.unwrap_or_default();
 
         reflection.load_dump_enums(dump.enums);
-        let mut superclass_names = reflection.load_dump_classes(dump.classes);
+        let mut superclass_names: Vec<Option<String>> = Vec::with_capacity(dump.classes.len() + 64);
+        reflection.load_classes(dump.classes, true, &mut superclass_names);
+        // the classes the dump leaves out that a game script reaches (Player, UserGameSettings, ...), in its format
+        let docs = serde_json::from_slice::<members::DocsSupplementLoad>(crate::data::DOCS_SUPPLEMENT).unwrap_or_default();
+        reflection.load_classes(docs.classes, false, &mut superclass_names);
 
-        // rbx-dom supplement (LoadLuneSupplement)
+        // rbx-dom supplement (LoadLuneSupplement): the classes neither lists, the properties the supplement's classes
+        // keep from game scripts, and the defaults of both
         if let Ok(database) = rbx_db {
             reflection.load_lune_supplement(database, &mut superclass_names);
         }
+        reflection.apply_write_capabilities(&docs.write_capabilities);
         reflection.apply_supplements(&superclass_names);
         reflection.link_aliases();
 
@@ -910,8 +874,10 @@ impl Reflection {
         }
     }
 
+    /// The classes of the dump (`reflected`: ReflectionService reports them), or of the docs supplement, which adds only
+    /// those the dump lacks. Each appends its superclass's name to `superclass_names`, indexed by class id.
     #[inline(never)]
-    fn load_dump_classes(&mut self, classes: Vec<members::DumpClass>) -> Vec<Option<String>> {
+    fn load_classes(&mut self, classes: Vec<members::DumpClass>, reflected: bool, superclass_names: &mut Vec<Option<String>>) {
         use rbx_dom_weak::types as dom;
         let font_weight = |name: &str| match name {
             "Thin" => Some(dom::FontWeight::Thin),
@@ -930,10 +896,12 @@ impl Reflection {
             "Italic" => Some(dom::FontStyle::Italic),
             _ => None,
         };
-        // Studio dump classes
-        let mut superclass_names: Vec<Option<String>> = Vec::with_capacity(classes.len() + 64);
         for entry in classes {
             let Some(class_name) = entry.name else { continue };
+            // (the dump wins wherever it has a class)
+            if !reflected && self.class_ids.contains_key(class_name.as_str()) {
+                continue;
+            }
             let id = self.new_class(&class_name);
             superclass_names.push(entry.superclass.filter(|name| !name.is_empty()));
             let mut own_properties = Vec::with_capacity(entry.properties.len());
@@ -1018,7 +986,7 @@ impl Reflection {
                 map
             });
             let class = &mut self.classes[id as usize];
-            class.reflected = true;
+            class.reflected = reflected;
             class.serialized = entry.serialized;
             class.display = entry.display;
             class.permits = entry.permits.permits;
@@ -1030,7 +998,24 @@ impl Reflection {
             class.own_callbacks = own_callbacks;
             class.raw_defaults = raw_defaults;
         }
-        superclass_names
+    }
+
+    /// Marks each property of the docs supplement's `writeCapabilities` on the class that declares it (subclasses share
+    /// that [`PropertyInfo`]). None of them has a `Write` permit, so each is already read-only.
+    #[inline(never)]
+    fn apply_write_capabilities(&mut self, capabilities: &[(String, String, String)]) {
+        for (class_name, prop_name, capability) in capabilities {
+            let (Some(&class_id), Some(&name_id)) = (self.class_ids.get(class_name.as_str()), self.name_ids.get(prop_name.as_str())) else {
+                continue;
+            };
+            if let Some(&index) = self.classes[class_id as usize]
+                .own_properties
+                .iter()
+                .find(|&&index| self.properties[index as usize].name == name_id)
+            {
+                self.properties[index as usize].write_capability = Some(capability.as_str().into());
+            }
+        }
     }
 
     #[inline(never)]
@@ -1299,6 +1284,7 @@ impl Reflection {
             instance_type: None,
             display: Box::new([]),
             permits: Permits::default(),
+            write_capability: None,
             origin,
         });
         index
@@ -1326,10 +1312,19 @@ impl Reflection {
                 }
             };
 
-            if is_new {
+            let fill_dom_props = is_new || !self.classes[id as usize].reflected;
+            if fill_dom_props {
                 let mut properties: Vec<_> = descriptor.properties.iter().collect();
                 crate::sort::by(&mut properties, |a, b| a.0.cmp(b.0));
                 for (property_name, property) in properties {
+                    if !is_new
+                        && self.classes[id as usize]
+                            .own_properties
+                            .iter()
+                            .any(|&index| self.names[self.properties[index as usize].name as usize].as_ref() == property_name.as_ref())
+                    {
+                        continue;
+                    }
                     let Some(datatype) = lune_datatype_name(&property.data_type) else {
                         continue;
                     };

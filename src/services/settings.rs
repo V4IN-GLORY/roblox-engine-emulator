@@ -340,14 +340,6 @@ pub fn install(engine: &Rc<Engine>, behaviors: &mut Behaviors) {
             Ok(())
         }));
     }
-    // the proxy settings may be read and not written
-    if let Some(network) = class("NetworkSettings") {
-        for member in ["HttpProxyEnabled", "HttpProxyURL"] {
-            let Some(name) = n(member) else { continue };
-            let message = format!("The current thread cannot write '{member}' (lacking capability RobloxScript)");
-            behaviors.add_setter(network, name, Rc::new(move |_, _, _, _| raise(message.clone())));
-        }
-    }
     // the live readings report themselves and answer the sim's reading
     for &(class_name, member, _) in READINGS {
         let (Some(owner), Some(name)) = (class(class_name), n(member)) else { continue };
