@@ -92,6 +92,11 @@ pub struct Output {
     pub forward: Option<Forward>,
     /// The coverage pass runs: its lines carry it ([`Entry::coverage`])
     pub coverage: bool,
+    /// `--max-output-lines`: past this many lines kept, a line is dropped (counted in `dropped`) and the run stops at the end of
+    /// the frame, as for [`DONE`] ([`crate::Options::max_output_lines`])
+    pub cap: Option<usize>,
+    kept: usize,
+    pub dropped: u64,
 }
 
 /// The engine whose list a loopback server's lines go to ([`Output::forward`])
@@ -138,6 +143,12 @@ impl Output {
         if entry.kind == "print" && entry.message == DONE {
             self.done = true;
         }
+        if self.cap.is_some_and(|cap| self.kept >= cap) {
+            self.dropped += 1;
+            self.done = true;
+            return;
+        }
+        self.kept += 1;
         match &mut self.spool {
             Some(spool) => spool.write(&entry),
             None => self.entries.push(entry),

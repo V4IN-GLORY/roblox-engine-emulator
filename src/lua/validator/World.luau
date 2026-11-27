@@ -875,6 +875,7 @@ local MAX_SEGMENTS = 512
 
 local function NewPath(Spacing)
 	local Path = Create("Path")
+	RawSet(Path, "Name", "Instance", true) -- (the service's path is named Instance: tostring(path), measured in a 0.748 play session)
 	RawSet(Path, "Status", Enum.PathStatus.NoPath, true)
 	Extra(Path).Spacing = Spacing
 	return Path

@@ -166,6 +166,9 @@ pub struct Options {
     /// `--fire-handlers`: after the run, a coverage pass calls once each handler the run's scripts connected or set that no
     /// event of the run called (lua/coverage.rs, docs/engine.md "Coverage pass")
     pub fire_handlers: bool,
+    /// `--max-output-lines <n>`: a run keeps at most this many output lines and stops at the end of the frame that reached
+    /// them (a script that errors in a tight loop); the summary's `outputDropped` counts the rest. None: every line
+    pub max_output_lines: Option<usize>,
 }
 
 impl Default for Options {
@@ -189,6 +192,7 @@ impl Default for Options {
             place_prices: cost::PlacePrices::default(),
             clock_probe: None,
             fire_handlers: false,
+            max_output_lines: None,
         }
     }
 }
@@ -958,6 +962,7 @@ impl Engine {
         let reflection = Reflection::shared()?;
         let mut output = output::Output::default();
         output.verbose = options.verbose;
+        output.cap = options.max_output_lines;
         let sched = scheduler::Scheduler::new(&options);
         let profile = RefCell::new(Rc::new(options.profile.clone()));
         Ok(Rc::new(Engine {

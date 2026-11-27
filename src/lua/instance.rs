@@ -1328,9 +1328,8 @@ fn install_base(behaviors: &mut Behaviors, reflection: &crate::Reflection) {
     // A script under an Actor starts when it is enabled, if it is in the DataModel by then
     if let (Some(script), Some(enabled)) = (reflection.class_id("BaseScript"), reflection.name_id("Enabled")) {
         behaviors.add_setter(script, enabled, Rc::new(move |lua, engine, id, value| {
-            let LuaValue::Boolean(on) = value else {
-                return raise(format!("Unable to assign property Enabled. boolean expected, got {}", typeof_value(engine, &value)));
-            };
+            // (any value, by its truth, as other boolean properties take it: Studio 0.748 took a table, validator/probe/expected)
+            let on = !matches!(value, LuaValue::Nil | LuaValue::Boolean(false));
             set_property(engine, id, enabled, Value::Bool(on));
             if on {
                 super::actors::start_under(lua, engine, id)?;

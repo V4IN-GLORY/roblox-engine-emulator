@@ -500,6 +500,29 @@ fn refused_service(engine: &Engine, service_name: &str) -> Option<&'static str> 
     }
 }
 
+/// The services a place has from the start, which `game.<Name>` finds before anything asked for them (measured in Studio
+/// 0.748, a new place's play session: a server Script's and a LocalScript's `game[Name]` at their first line; the client's
+/// ServerScriptService and ServerStorage are empty ones; MessagingService and TeleportService are found only after GetService).
+/// The engine makes them when first looked up, so a run's `game:GetChildren()` is as before until then.
+const PLACE_SERVICES: &[&str] = &[
+    "ServerScriptService", "ServerStorage", "StarterPack", "Teams", "Chat", "MaterialService", "LocalizationService", "TestService",
+    "VoiceChatService", "Debris", "PhysicsService", "MarketplaceService", "BadgeService", "ContextActionService", "PathfindingService",
+    "ProximityPromptService", "TextChatService", "SoundService", "Workspace", "Players", "Lighting", "ReplicatedFirst", "ReplicatedStorage",
+    "StarterGui", "StarterPlayer", "CollectionService", "RunService", "TweenService", "UserInputService", "HttpService", "GuiService",
+    "TextService",
+];
+
+/// `game.<name>` that names no child: the place's service of that name, made now (a server's DataStoreService too), as
+/// [`PLACE_SERVICES`] says
+pub fn place_service(engine: &Engine, game: InstanceId, name: &[u8]) -> Option<InstanceId> {
+    let name = std::str::from_utf8(name).ok()?;
+    let listed = PLACE_SERVICES.contains(&name) || (name == "DataStoreService" && engine.options.server());
+    if !listed || game != engine.world().game {
+        return None;
+    }
+    get_service(engine, game, name).ok()
+}
+
 /// GetService: the existing service child, or a new one (named, parented without events and
 /// parent-locked).
 pub fn get_service(engine: &Engine, game: InstanceId, service_name: &str) -> Result<InstanceId, Flow> {
@@ -1675,6 +1698,51 @@ pub fn install_gui_behaviors(engine: &Rc<Engine>) {
         let write = format!("The current thread cannot write '{member}' (lacking capability {capability})");
         behaviors.add_getter(owner, name, getter(move |_, _, _| raise(read.clone())));
         behaviors.add_setter(owner, name, Rc::new(move |_, _, _, _| raise(write.clone())));
+    }
+    // Writes a game script is refused in words of their own, not the capability text of the API data (measured in Studio
+    // 0.748: validator/probe/expected, a play session's server and client). A Player's are refused once it has joined (it is
+    // in Players): every player a script meets in a session has; one a harness makes stands in for a joining player, and
+    // the harness sets who it is before it joins.
+    const REFUSED_WRITES: &[(&str, &str, &str)] = &[
+        ("Player", "UserId", "The current thread cannot set 'Player's ID' (lacking capability WritePlayer)"),
+        ("Player", "userId", "The current thread cannot set 'Player's ID' (lacking capability WritePlayer)"),
+        ("Player", "HasVerifiedBadge", "The current thread cannot set 'Player's Verified Badge Status' (lacking capability WritePlayer)"),
+        ("Debris", "MaxItems", "The current thread cannot access 'DebrisService MaxItems is restricted' (lacking capability LocalUser)"),
+    ];
+    let players_class = class(&reflection, "Players");
+    for &(class_name, member, message) in REFUSED_WRITES {
+        let (Some(owner), Some(name)) = (class(&reflection, class_name), n(member)) else { continue };
+        let joined_only = class_name == "Player";
+        behaviors.add_setter(owner, name, Rc::new(move |lua, engine, id, value| {
+            let joined = {
+                let state = engine.state.borrow();
+                state.dom.parent_of(id).is_some_and(|parent| Some(state.dom.class_of(parent)) == players_class)
+            };
+            if joined_only && !joined {
+                let class = engine.state.borrow().dom.at(id).class;
+                let Some(info) = engine.reflection.class_property(class, name).cloned() else { return Ok(()) };
+                let stored = convert::coerce(lua, engine, &info, &value)?;
+                set_property(engine, id, name, stored);
+                return Ok(());
+            }
+            raise(message)
+        }));
+    }
+    // UIAspectRatioConstraint.AspectRatio takes a positive number (Studio 0.748 raised this for a table assigned, which it
+    // reads as no number: validator/probe/expected)
+    if let (Some(constraint), Some(name)) = (class(&reflection, "UIAspectRatioConstraint"), n("AspectRatio")) {
+        behaviors.add_setter(constraint, name, Rc::new(move |lua, engine, id, value| {
+            const NOT_POSITIVE: &str = "UIAspectRatioConstraint.AspectRatio set to a non-positive value. Value must be a positive.";
+            let class = engine.state.borrow().dom.at(id).class;
+            let Some(info) = engine.reflection.class_property(class, name).cloned() else { return Ok(()) };
+            match convert::coerce(lua, engine, &info, &value) {
+                Ok(Value::Number(ratio)) if ratio > 0.0 => {
+                    set_property(engine, id, name, Value::Number(ratio));
+                    Ok(())
+                }
+                _ => raise(NOT_POSITIVE),
+            }
+        }));
     }
     // UIPageLayout.EasingStyle keeps its value when Spring or Bezier is assigned (Studio 0.747: by item, name or value;
     // no error and no Changed)

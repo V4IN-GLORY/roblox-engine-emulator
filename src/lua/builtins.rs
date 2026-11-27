@@ -181,8 +181,10 @@ unsafe fn raise(state: *mut ffi::lua_State, positioned: bool) -> ! {
 
 /// coroutine.create or wrap (`name`): the VM's own (`native`), after charging the script for the thread it makes as task.spawn
 /// does (cost.rs THREAD, through `charge`) and checking its function here, so an error names the line that called it.
-pub fn coroutine_function(lua: &Lua, name: &'static str, native: LuaFunction, charge: LuaFunction, seconds: f64) -> LuaResult<LuaFunction> {
-    let extras = vec![LuaValue::Function(native), LuaValue::Function(charge), LuaValue::Number(seconds)];
+/// `made` is called with what the native function made (a thread for create: a desynchronized caller's thread runs
+/// desynchronized, lua/actors.rs).
+pub fn coroutine_function(lua: &Lua, name: &'static str, native: LuaFunction, charge: LuaFunction, seconds: f64, made: LuaFunction) -> LuaResult<LuaFunction> {
+    let extras = vec![LuaValue::Function(native), LuaValue::Function(charge), LuaValue::Number(seconds), LuaValue::Function(made)];
     cfunction::raw(lua, name, Kind::Library, coroutine_body, None, extras)
 }
 
@@ -198,6 +200,11 @@ unsafe fn coroutine_body(state: *mut ffi::lua_State) -> c_int {
         ffi::lua_pushvalue(state, extra(1));
         ffi::lua_insert(state, 1);
         ffi::lua_call(state, 1, 1);
+        if ffi::lua_type(state, 1) == ffi::LUA_TTHREAD {
+            ffi::lua_pushvalue(state, extra(4));
+            ffi::lua_pushvalue(state, 1);
+            ffi::lua_call(state, 1, 0);
+        }
         1
     }
 }

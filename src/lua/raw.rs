@@ -1353,6 +1353,9 @@ unsafe fn index_fast(state: *mut ffi::lua_State) -> Out {
             let bytes = arg_bytes(state, 2).unwrap_or_default();
             materialize(engine, id);
             child = engine.state.borrow().dom.find_child(id, bytes);
+            if child.is_none() {
+                child = crate::services::place_service(engine, id, bytes);
+            }
             if child.is_none()
                 && let Some(target) = engine.reflection.upper_first_id(bytes)
             {

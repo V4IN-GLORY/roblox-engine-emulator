@@ -328,6 +328,19 @@ mod tests {
         summary["coverage"][list].as_array().unwrap().iter().map(|label| label.as_str().unwrap().to_string()).collect()
     }
 
+    /// `--max-output-lines`: a run keeps that many lines, drops (and counts) the rest and stops at the end of that frame,
+    /// where a script that errors every frame would otherwise write a line each frame for the whole run
+    #[test]
+    fn a_capped_run_keeps_its_first_lines_and_stops() {
+        let body = "game:GetService('RunService').Heartbeat:Connect(function() for i = 1, 10 do task.spawn(error, 'loop') end end)";
+        let capped = run_body("capped", "server", body, &["--max-output-lines", "25"]);
+        assert_eq!(capped["output"].as_array().unwrap().len(), 25, "{capped}");
+        assert!(capped["outputDropped"].as_u64().is_some_and(|dropped| dropped > 0 && dropped < 10), "{capped}");
+        assert_eq!(capped["done"], true, "{capped}");
+        let whole = run_body("whole", "server", body, &[]);
+        assert!(whole["output"].as_array().unwrap().len() > 100 && whole.get("outputDropped").is_none(), "{whole}");
+    }
+
     /// A handler nothing in the run calls is called once by the pass, and what it raises is an error of the run marked as the
     /// pass's; without the flag the run is as it was (no call, no `coverage` in the summary or on a line)
     #[test]

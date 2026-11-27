@@ -172,6 +172,17 @@ pub(crate) fn desynchronized(engine: &Engine, state: *mut mlua::ffi::lua_State) 
     (!parallel.phases.is_empty() || !parallel.waking.is_empty()) && parallel.modes.get(&(state as usize)) == Some(&true)
 }
 
+/// A thread the task library starts (task.spawn, defer, delay) from a desynchronized one runs desynchronized too, held as a
+/// waking thread until it finishes. (coroutine.create and wrap, the VM's own, are not seen: their threads are not checked.)
+pub(crate) fn inherit_desynchronized(lua: &Lua, engine: &Engine, thread: &LuaThread) {
+    if !desynchronized(engine, lua.current_thread().to_pointer() as *mut mlua::ffi::lua_State) {
+        return;
+    }
+    let mut modules = engine.modules.borrow_mut();
+    modules.parallel.modes.insert(key(thread), true);
+    modules.parallel.waking.insert(key(thread), thread.clone());
+}
+
 /// What a desynchronized thread may not do to a member, as Roblox refuses it (measured in Studio 0.748, a server Script
 /// under an Actor in a Heartbeat ConnectParallel handler): a method the dump gives no `CallParallel` (Destroy, Clone,
 /// SetAttribute, GetService, FireAllClients, WaitForChild, PivotTo; FindFirstChild, GetChildren, GetAttribute, Raycast, IsA

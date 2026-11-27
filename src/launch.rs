@@ -185,6 +185,8 @@ pub struct Args {
     pub client_profiles: Vec<String>,
     /// `--fire-handlers`: the coverage pass ([`crate::Options::fire_handlers`])
     pub fire_handlers: bool,
+    /// `--max-output-lines <n>` ([`crate::Options::max_output_lines`])
+    pub max_output_lines: Option<usize>,
 }
 
 fn size(key: &str, text: &str) -> Result<(f64, f64), String> {
@@ -207,6 +209,7 @@ impl Args {
             "--load-string" => self.load_string = true,
             "--native" => self.native = true,
             "--fire-handlers" => self.fire_handlers = true,
+            "--max-output-lines" => self.max_output_lines = Some(need()?.parse().map_err(|_| "--max-output-lines: not a count".to_string())?),
             "--roots" => self.roots = need()?.split(';').filter(|r| !r.is_empty()).map(str::to_string).collect(),
             "--project" => self.project = Some(need()?),
             "--place" => self.place = Some(need()?),
@@ -371,6 +374,7 @@ pub fn prepare(args: &Args, default_repo: &Path) -> Result<Prepared, String> {
         place_prices,
         clock_probe: None,
         fire_handlers: args.fire_handlers,
+        max_output_lines: args.max_output_lines,
     };
     let mounts = args
         .mounts

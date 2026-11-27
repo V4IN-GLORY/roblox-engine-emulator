@@ -38,7 +38,21 @@ EXTERN_TYPE = re.compile(r"^declare extern type (\w+) extends (\w+)", re.M)
 CHILD_LOOKUP = re.compile(r"^TypeError: Key '[^']*' not found in external type '(\w+)'$")
 # Parallel Luau: what only runs (or only means anything) in a script under an Actor
 PARALLEL = re.compile(r"ConnectParallel|BindTo\w*Parallel|BindToMessage|task\.(?:de)?synchronize|SharedTable|GetActor\s*\(|:SendMessage\s*\(")
-RUN_ARGUMENTS = ["--seconds", "1", "--script-timeout", "2", "--mode", "play", "--fire-handlers"]
+# Which side code runs on, by what it uses (--context auto): each match weighs for its side, and the request's words break a tie
+CLIENT_SIGNS = re.compile(r"\bLocalPlayer\b|UserInputService|ContextActionService|GuiService|HapticService|VRService|:GetMouse\s*\(|RenderStepped|"
+	r"BindToRenderStep|\bPlayerGui\b|:FireServer\s*\(|:InvokeServer\s*\(|OnClientEvent|OnClientInvoke|:SetCore\s*\(|:SetCoreGuiEnabled\s*\(|"
+	r"CurrentCamera|PlayerScripts")
+SERVER_SIGNS = re.compile(r"OnServerEvent|OnServerInvoke|:FireClient\s*\(|:FireAllClients\s*\(|DataStoreService|MessagingService|MemoryStoreService|"
+	r"ServerScriptService|ServerStorage|:LoadCharacter\s*\(|AwardBadge|ProcessReceipt|:(?:Get|Post|Request)Async\s*\(|TeleportAsync|BanAsync|"
+	r":SetNetworkOwner\s*\(")
+CLIENT_WORDS = re.compile(r"\blocal ?script\b|\bclient[- ]side\b|\bon the client\b|StarterPlayerScripts|StarterGui|StarterCharacterScripts", re.I)
+SERVER_WORDS = re.compile(r"\bserver[- ]side\b|\bserver script\b|\bon the server\b|ServerScriptService|\bScript in\b", re.I)
+# A module's answer: the code ends returning a table it built, whose functions that take no arguments the run calls
+MODULE_RETURN = re.compile(r"^return\s+([A-Za-z_]\w*)\s*$")
+MISSING_MEMBER = re.compile(r"^(?:.*?:\d+: )?(.+?) is not a valid member of (\w+) \"[^\"]*\"$")
+# (a run's verdict is settled long before a thousand lines: the cap ends a script that errors in a loop, whose millions of lines
+# a batch process can't print)
+RUN_ARGUMENTS = ["--seconds", "1", "--script-timeout", "2", "--mode", "play", "--fire-handlers", "--max-output-lines", "1000"]
 # (the batch's own cap per row, as the single run's subprocess timeout is)
 ROW_WALL_SECONDS = "60"
 
@@ -126,29 +140,156 @@ def long_string(text: str) -> str:
 	return f"[{'=' * level}[\n{text}]{'=' * level}]"
 
 
-def harness(code: str, context: str, actor: bool) -> str:
-	"""The run's harness: the code as its body, or (actor) a harness that places the code as a script inside an Actor."""
+def harness(code: str, context: str, actor: bool) -> tuple[str, int]:
+	"""The run's harness, and how many lines it puts before the code's first: the code as its body (a vararg function, as a
+	script's chunk is), or (actor) a harness that places the code as a script inside an Actor."""
 	code = EXPORT_TYPE.sub(r"\1type", code)
 	if not actor:
-		return f"return function(Context)\n{code}\nend\n"
+		calls = module_calls(code)
+		if not calls:
+			return f"return function(Context, ...)\n{code}\nend\n", 1
+		# (each in a thread of its own, so one that errors or waits doesn't keep the others from running)
+		spawned = "".join(f"\ttask.spawn(function() Module{call}() end)\n" for call in calls)
+		return f"return function(Context, ...)\n\tlocal Module = (function(...)\n{code}\nend)(...)\n{spawned}end\n", 2
 	# (a server Script runs under ServerScriptService; a client's LocalScript under its PlayerScripts)
 	if context == "server":
 		kind, parent = "Script", 'game:GetService("ServerScriptService")'
 	else:
 		kind, parent = "LocalScript", 'game:GetService("Players").LocalPlayer:WaitForChild("PlayerScripts")'
 	return (f"return function(Context)\n\tlocal Actor = Instance.new(\"Actor\")\n\tlocal Row = Instance.new(\"{kind}\")\n"
-		f"\tRow.Name = \"Row\"\n\tRow.Source = {long_string(code)}\n\tRow.Parent = Actor\n\tActor.Parent = {parent}\nend\n")
+		f"\tRow.Name = \"Row\"\n\tRow.Source = {long_string(code)}\n\tRow.Parent = Actor\n\tActor.Parent = {parent}\nend\n"), 0
 
 
 def uses_actor(code: str, force: bool) -> bool:
 	return force or bool(PARALLEL.search(code))
 
 
+def detect_context(code: str, hint: str = "") -> str:
+	"""client or server, by the APIs the code uses (a client's LocalPlayer, UserInputService, FireServer ...; a server's
+	DataStores, OnServerEvent, FireClient ...), then the request's words (a LocalScript, a server script); server when neither says."""
+	client, server = len(CLIENT_SIGNS.findall(code)), len(SERVER_SIGNS.findall(code))
+	if client == server:
+		client, server = len(CLIENT_WORDS.findall(hint)), len(SERVER_WORDS.findall(hint))
+	return "client" if client > server else "server"
+
+
+def module_calls(code: str) -> list[str]:
+	"""For code that ends returning a table it built (a ModuleScript), how to call that table's functions that take no
+	arguments (`M.Init()`, `M:Start()`): a run that only loads the module never runs them."""
+	lines = [line for line in code.strip().splitlines() if line.strip() and not line.strip().startswith("--")]
+	returned = MODULE_RETURN.match(lines[-1].strip()) if lines else None
+	if not returned:
+		return []
+	name = re.escape(returned[1])
+	return [f"{separator}{method}" for separator, method in re.findall(rf"^\s*function\s+{name}([.:])(\w+)\s*\(\s*\)", code, re.M)]
+
+
+# Services a place keeps its own instances in: a name looked up under one is a child the code expects. Under any other service
+# (UserInputService.MouseDelta) a name that is no member is the code's mistake.
+CONTAINER_SERVICES = {"Workspace", "ReplicatedStorage", "ReplicatedFirst", "ServerStorage", "ServerScriptService", "StarterGui",
+	"StarterPack", "StarterPlayer", "Lighting", "SoundService", "Teams", "Players", "Chat", "TextChatService", "MaterialService"}
+HARNESS_FOLDER = "RURFixtures"
+REQUIRE_UNRESOLVED = re.compile(r"Could not resolve require path")
+UNKNOWN_GLOBAL = re.compile(r"^(\d+):\d+: TypeError: Unknown global '(\w+)'")
+ERROR_LINE = re.compile(r"^\S.*?:(\d+): ")
+
+_CLASSES: tuple[dict[str, set[str]], set[str]] | None = None
+
+
+def class_data() -> tuple[dict[str, set[str]], set[str]]:
+	"""Each class's member names (its superclasses' too, lower-cased) and the services, from the API data the engine compiles in."""
+	global _CLASSES
+	if _CLASSES is None:
+		classes = {}
+		for name in ("reflection.json", "docs-supplement.json"):
+			with open(os.path.join(ROOT, "data", name), encoding="utf-8") as dataFile:
+				for entry in json.load(dataFile)["classes"]:
+					classes.setdefault(entry["name"], entry)
+		own = {name: {member["name"].lower() for kind in ("properties", "methods", "events", "callbacks") for member in entry.get(kind) or []}
+			for name, entry in classes.items()}
+		members = {}
+		for name in classes:
+			found, current = set(), name
+			while current in classes:
+				found |= own[current]
+				current = classes[current].get("superclass")
+			members[name] = found
+		services = {name for name, entry in classes.items() if isinstance(entry.get("permits"), dict) and "GetService" in entry["permits"]}
+		_CLASSES = (members, services)
+	return _CLASSES
+
+
+def _near(word: str, other: str) -> bool:
+	"""A typo of it: one edit apart, two for a name over six letters."""
+	allowed = 2 if len(other) > 6 else 1
+	if abs(len(word) - len(other)) > allowed:
+		return False
+	previous = list(range(len(other) + 1))
+	for row, letter in enumerate(word, 1):
+		current = [row]
+		for column, wanted in enumerate(other, 1):
+			current.append(min(previous[column] + 1, current[column - 1] + 1, previous[column - 1] + (letter != wanted)))
+		previous = current
+	return previous[-1] <= allowed
+
+
+def environment_error(message: str) -> bool:
+	"""An error that comes from the place the code expects rather than the code: a child it looks up by name that an empty
+	place lacks (`workspace.Map`, `ReplicatedStorage.Remotes`, `script.Parent.Handle`). A name that is, or is a typo of, one of
+	the class's members (`part.Positon`), a name under a service that holds no instances of the place's
+	(`UserInputService.MouseDelta`) and a service the side lacks (`game.ServerScriptService` on a client) are the code's."""
+	first = ERROR_LINE.sub("", message.splitlines()[0] if message else "")
+	# (the run's own folder: code that expects `script.Parent` to be a part, a tool or a GUI finds the harness's; a module path
+	# the place would hold)
+	if HARNESS_FOLDER in first or REQUIRE_UNRESOLVED.search(first):
+		return True
+	missing = MISSING_MEMBER.match(first)
+	if not missing:
+		return False
+	members, services = class_data()
+	key, owner = missing[1], missing[2]
+	if owner == "DataModel":
+		return key not in services
+	if owner in services and owner not in CONTAINER_SERVICES:
+		return False
+	known = members.get(owner, set())
+	lowered = key.lower()
+	return lowered not in known and not (len(lowered) >= 4 and any(_near(lowered, member) for member in known))
+
+
+def verdict(row: dict, code: str, offset: int) -> str:
+	"""One word for a row: ok; untrusted (it reached an API ree doesn't emulate); environment (only children of a place it
+	expects are missing); snippet (besides those, only lines using a global the code never defines fail: a fragment of a
+	longer script); error (anything else: the code is wrong). Snippets need luau-lsp's warnings."""
+	if row["unemulated"]:
+		return "untrusted"
+	if not row["errors"]:
+		return "ok"
+	lines = code.splitlines()
+	names = {unknown[2] for unknown in map(UNKNOWN_GLOBAL.match, row["warnings"]) if unknown}
+	kinds = set()
+	for error in row["errors"]:
+		if error in row["environment"]:
+			kinds.add("environment")
+			continue
+		at = ERROR_LINE.match(error)
+		if not at:
+			# (an engine call's error names no line: in a fragment it's most likely an undefined global passed in, `FireClient(player)`)
+			kinds.add("snippet" if names else "error")
+			continue
+		index = int(at[1]) - 1 - offset
+		text = lines[index] if 0 <= index < len(lines) else ""
+		kinds.add("snippet" if any(re.search(rf"\b{name}\b", text) for name in names) else "error")
+	if "error" in kinds:
+		return "error"
+	return "snippet" if "snippet" in kinds else "environment"
+
+
 def result_of(summary: dict | None, failure: str, actor: bool) -> dict:
 	"""A row's result from ree's run summary (None: ree didn't run, and failure says why)."""
 	if summary is None:
-		return {"ok": None, "errors": [f"ree didn't run: {failure[-400:]}"], "unemulated": [], "stubbed": [], "coverage": {},
-			"warnings": [], "actor": actor}
+		return {"ok": None, "errors": [f"ree didn't run: {failure[-400:]}"], "environment": [], "unemulated": [], "stubbed": [],
+			"coverage": {}, "warnings": [], "actor": actor, "verdict": "untrusted"}
 	output = summary.get("output") or []
 	errors = [line["message"] for line in output if line.get("kind") == "error"]
 	unemulated = [line["message"].split(" is not emulated")[0] for line in output if line.get("kind") == "missing"]
@@ -160,16 +301,20 @@ def result_of(summary: dict | None, failure: str, actor: bool) -> dict:
 		"fired": passed.get("fired", []),
 	}
 	ok = None if unemulated else not errors
-	return {"ok": ok, "errors": errors, "unemulated": unemulated, "stubbed": stubbed, "coverage": coverage, "warnings": [],
-		"actor": actor}
+	environment = [error for error in errors if environment_error(error)]
+	return {"ok": ok, "errors": errors, "environment": environment, "unemulated": unemulated, "stubbed": stubbed,
+		"coverage": coverage, "warnings": [], "actor": actor}
 
 
-def validate(code: str, context: str, ree: str, warnings: bool = True, actor: bool = False) -> dict:
+def validate(code: str, context: str, ree: str, warnings: bool = True, actor: bool = False, hint: str = "") -> dict:
+	if context == "auto":
+		context = detect_context(code, hint)
 	inActor = uses_actor(code, actor)
 	with tempfile.TemporaryDirectory() as folder:
 		path = os.path.join(folder, "Block.luau")
+		text, offset = harness(code, context, inActor)
 		with open(path, "w", encoding="utf-8") as harnessFile:
-			harnessFile.write(harness(code, context, inActor))
+			harnessFile.write(text)
 		result = subprocess.run([ree, "run", "--harness", path, *RUN_ARGUMENTS, "--run-context", context],
 			capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=120)
 	stdout = result.stdout
@@ -177,21 +322,25 @@ def validate(code: str, context: str, ree: str, warnings: bool = True, actor: bo
 		summary = json.loads(stdout[stdout.index("{"):])
 	except ValueError:
 		summary = None
-	row = result_of(summary, result.stderr or stdout, inActor)
-	if warnings and summary is not None:
-		row["warnings"] = static_warnings([code])[0]
+	row = {"context": context, **result_of(summary, result.stderr or stdout, inActor)}
+	if summary is not None:
+		if warnings:
+			row["warnings"] = static_warnings([code])[0]
+		row["verdict"] = verdict(row, code, offset)
 	return row
 
 
 def validate_chunk(rows: list[dict], ree: str, workers: int | None, warnings: bool, actor: bool) -> list[dict]:
 	"""One `ree run --batch` process (and one luau-lsp call) for rows ({"code", "context"}); their results in order."""
 	with tempfile.TemporaryDirectory() as folder:
-		jobs, inActor = [], []
+		jobs, inActor, offsets = [], [], []
 		for index, row in enumerate(rows):
 			inActor.append(uses_actor(row["code"], actor))
 			path = os.path.join(folder, f"Row{index}.luau")
+			text, offset = harness(row["code"], row["context"], inActor[-1])
+			offsets.append(offset)
 			with open(path, "w", encoding="utf-8") as harnessFile:
-				harnessFile.write(harness(row["code"], row["context"], inActor[-1]))
+				harnessFile.write(text)
 			jobs.append({"id": str(index), "args": ["--harness", path, *RUN_ARGUMENTS, "--run-context", row["context"],
 				"--max-wall-seconds", ROW_WALL_SECONDS]})
 		spec = os.path.join(folder, "jobs.json")
@@ -204,14 +353,21 @@ def validate_chunk(rows: list[dict], ree: str, workers: int | None, warnings: bo
 		answers = {entry["id"]: entry for entry in json.loads(stdout[stdout.index("{"):])["results"] if entry}
 	except (ValueError, KeyError, TypeError):
 		answers = {}
+	# (a process that died with a row takes the chunk's unanswered rows with it: they run again, half at a time, until only
+	# the row that kills it is left)
+	if len(rows) > 1 and len(answers) < len(rows):
+		half = len(rows) // 2
+		return validate_chunk(rows[:half], ree, workers, warnings, actor) + validate_chunk(rows[half:], ree, workers, warnings, actor)
 	results = []
 	for index in range(len(rows)):
 		entry = answers.get(str(index)) or {}
 		failure = entry.get("error") or result.stderr or stdout or "no result"
-		results.append(result_of(entry.get("summary"), failure, inActor[index]))
+		results.append({"context": rows[index]["context"], **result_of(entry.get("summary"), failure, inActor[index])})
 	if warnings:
 		for row, found in zip(results, static_warnings([row["code"] for row in rows])):
 			row["warnings"] = found
+	for result, row, offset in zip(results, rows, offsets):
+		result.setdefault("verdict", verdict(result, row["code"], offset))
 	return results
 
 
@@ -229,7 +385,10 @@ def validate_batch(source, out, context: str, ree: str, chunk: int, workers: int
 		if not line.strip():
 			continue
 		row = json.loads(line)
-		pending.append({"id": row.get("id", number), "code": row["code"], "context": row.get("context") or context})
+		rowContext = row.get("context") or context
+		if rowContext == "auto":
+			rowContext = detect_context(row["code"], row.get("hint") or "")
+		pending.append({"id": row.get("id", number), "code": row["code"], "context": rowContext})
 		if len(pending) >= chunk:
 			flush()
 	if pending:
@@ -241,7 +400,8 @@ if __name__ == "__main__":
 	parser.add_argument("file", nargs="?")
 	parser.add_argument("--batch", help="JSON lines of {id, code, context}")
 	parser.add_argument("--out", help="where --batch writes its result lines (default: stdout)")
-	parser.add_argument("--context", choices=["server", "client"], default="server")
+	parser.add_argument("--context", choices=["auto", "server", "client"], default="auto",
+		help="auto: by the APIs the code uses, then a row's hint (extract.py)")
 	parser.add_argument("--ree", default=os.path.join(ROOT, "target", "release", "ree.exe"))
 	parser.add_argument("--chunk", type=int, default=256, help="rows per ree process")
 	parser.add_argument("--workers", type=int, help="rows a ree process runs at once (default: one per CPU)")

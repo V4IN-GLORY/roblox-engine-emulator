@@ -82,9 +82,14 @@ fn to_thread(lua: &Lua, engine: &Engine, value: &LuaValue, index: usize, call: &
             if let Some(state) = engine.state.borrow().sched.task_state(thread) {
                 return raise_plain(format!("Cannot call task.{call} on a thread that is already '{state}' in the task library"));
             }
+            super::actors::inherit_desynchronized(lua, engine, thread);
             Ok(thread.clone())
         }
-        LuaValue::Function(function) => Ok(lua.create_thread(function.clone())?),
+        LuaValue::Function(function) => {
+            let thread = lua.create_thread(function.clone())?;
+            super::actors::inherit_desynchronized(lua, engine, &thread);
+            Ok(thread)
+        }
         _ => super::raise_at_caller(format!("invalid argument #{index} to '{call}' (function or thread expected)")),
     }
 }
@@ -942,9 +947,14 @@ fn build_shared(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<LuaTable> {
     let coroutine: LuaTable = exports.get("Coroutine")?;
     let native_coroutine: LuaTable = globals.get("coroutine")?;
     let charge = charge_fn(lua, engine)?;
+    let e = engine.clone();
+    let made = super::lua_fn(lua, move |lua, thread: LuaThread| {
+        super::actors::inherit_desynchronized(lua, &e, &thread);
+        Ok(())
+    })?;
     for name in ["create", "wrap"] {
         let native: LuaFunction = native_coroutine.get(name)?;
-        coroutine.raw_set(name, super::builtins::coroutine_function(lua, name, native, charge.clone(), crate::cost::THREAD)?)?;
+        coroutine.raw_set(name, super::builtins::coroutine_function(lua, name, native, charge.clone(), crate::cost::THREAD, made.clone())?)?;
     }
     shared.raw_set("coroutine", coroutine)?;
     shared.raw_set("utf8", exports.get::<LuaValue>("Utf8")?)?;

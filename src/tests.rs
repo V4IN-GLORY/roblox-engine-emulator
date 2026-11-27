@@ -7127,6 +7127,7 @@ fn a_desynchronized_thread_is_refused_what_is_not_thread_safe() {
                 Try("event", function() return Part.Touched end)
                 Try("wait", function() task.wait() end)
                 Try("service", function() return game:GetService("Players") end)
+                task.spawn(Try, "spawned", function() Part.Name = "S" end)
                 task.synchronize()
                 Try("synchronized", function() Part.Name = "Z" end)
             end)
@@ -7163,7 +7164,63 @@ fn a_desynchronized_thread_is_refused_what_is_not_thread_safe() {
             "event false Event BasePart.Touched is not safe to access in parallel",
             "wait true nil",
             "service false Function ServiceProvider.GetService is not safe to call in parallel",
+            "spawned false Property Instance.Name is not safe to write in parallel",
             "synchronized true nil",
+        ]
+    );
+}
+
+/// A place's services are found by name before anything asked for them, on either side; MessagingService and TeleportService
+/// only after GetService, DataStoreService only on a server (measured in a 0.748 play session's server Script and LocalScript)
+#[test]
+fn a_places_services_are_found_by_name_from_the_start() {
+    for (context, data_stores) in [(crate::RunContext::Server, true), (crate::RunContext::Client, false)] {
+        let (lua, engine) = start_with(Options { mode: "play".into(), run_context: context, ..Options::default() });
+        let output = run(
+            &lua,
+            &engine,
+            r#"
+            local Found = {}
+            for _, Name in { "ServerScriptService", "ServerStorage", "StarterPack", "Teams", "Debris", "MarketplaceService", "MessagingService", "DataStoreService" } do
+                table.insert(Found, Name .. "=" .. tostring(pcall(function() return game[Name] end)))
+            end
+            print(table.concat(Found, " "))
+            "#,
+        );
+        let wanted = format!("print: ServerScriptService=true ServerStorage=true StarterPack=true Teams=true Debris=true MarketplaceService=true MessagingService=false DataStoreService={data_stores}");
+        assert_eq!(output, [wanted]);
+    }
+}
+
+/// Writes Roblox refuses in words of their own (Studio 0.748: validator/probe/expected): a joined player's UserId and
+/// HasVerifiedBadge, Debris.MaxItems, a non-positive AspectRatio; a script's Enabled takes any value by its truth
+#[test]
+fn writes_roblox_refuses_in_words_of_their_own() {
+    let (lua, engine) = start_with(Options { mode: "play".into(), run_context: crate::RunContext::Server, ..Options::default() });
+    let output = run(
+        &lua,
+        &engine,
+        r#"
+        local Player = Instance.new("Player")
+        Player.UserId = 5
+        Player.Parent = game:GetService("Players")
+        print(Player.UserId, select(2, pcall(function() Player.UserId = 6 end)))
+        print(select(2, pcall(function() game:GetService("Debris").MaxItems = 10 end)))
+        local Ratio = Instance.new("UIAspectRatioConstraint")
+        Ratio.AspectRatio = 2
+        print(Ratio.AspectRatio, select(2, pcall(function() Ratio.AspectRatio = 0 end)))
+        local Worker = Instance.new("Script")
+        Worker.Enabled = {}
+        print(Worker.Enabled)
+        "#,
+    );
+    assert_eq!(
+        output,
+        [
+            "print: 5 The current thread cannot set 'Player's ID' (lacking capability WritePlayer)",
+            "print: The current thread cannot access 'DebrisService MaxItems is restricted' (lacking capability LocalUser)",
+            "print: 2 UIAspectRatioConstraint.AspectRatio set to a non-positive value. Value must be a positive.",
+            "print: true",
         ]
     );
 }

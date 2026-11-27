@@ -869,6 +869,10 @@ pub(crate) fn run_done(emulator: &Emulator, args: &RecordArgs, host: &Host, ran:
     if engine.options.fire_handlers {
         summary["coverage"] = crate::lua::coverage::summary(engine);
     }
+    let dropped = engine.state.borrow().output.dropped;
+    if dropped > 0 {
+        summary["outputDropped"] = json!(dropped);
+    }
     if let Some(loopback) = crate::loopback::summary(engine) {
         summary["runContext"] = json!("loopback");
         summary["loopback"] = loopback;

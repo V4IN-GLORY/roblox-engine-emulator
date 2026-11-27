@@ -296,7 +296,8 @@ is Client; a server starts a Script with RunContext Legacy under Workspace or Se
 ServerStorage (the rules a loopback server boots a place's scripts by). A `ConnectParallel` handler runs desynchronized:
 a RunService frame event's after its serial handlers, a deferred event's (an Actor's `BindToMessageParallel` message) in a
 phase of its own. A desynchronized thread that yields on anything but `task.synchronize` (a `task.wait`) wakes still
-desynchronized. Such a thread is refused, in Roblox's words (measured in Studio 0.748: a server Script under an Actor, the
+desynchronized, and so does a thread one starts (task.spawn, defer, delay, coroutine.create; measured: each was refused a
+property write; coroutine.wrap's thread is the VM's and is not seen, so it runs unchecked). Such a thread is refused, in Roblox's words (measured in Studio 0.748: a server Script under an Actor, the
 calls in a Heartbeat `ConnectParallel` handler):
 
 | what | refused when | message |
@@ -308,6 +309,15 @@ calls in a Heartbeat `ConnectParallel` handler):
 The class named is the member's declaring class. Property reads, `CallParallel` methods (FindFirstChild, GetChildren,
 GetAttribute, Raycast, IsA, BindableEvent.Fire), Instance.new, task.wait and task.spawn ran; after `task.synchronize()`
 everything does. A thread a desynchronized one spawns or resumes as a coroutine is not checked.
+
+## A place's services (`src/services/mod.rs` `PLACE_SERVICES`)
+
+`game.<Name>` finds the services a place has from the start before anything asked for them (ServerScriptService,
+ServerStorage, StarterPack, Teams, Debris, MarketplaceService, PathfindingService, ...; a server's DataStoreService too):
+the engine makes one when it is first looked up, so `game:GetChildren()` is as before until then. Measured in a 0.748 play
+session (a server Script's and a LocalScript's `game[Name]` at their first line): a client finds ServerScriptService and
+ServerStorage too (empty), MessagingService and TeleportService are found only after GetService, DataStoreService only on a
+server.
 
 ## Unemulated methods (`src/lua/fallback.rs`)
 
