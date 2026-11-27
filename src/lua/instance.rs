@@ -1431,8 +1431,10 @@ fn install_base(behaviors: &mut Behaviors, reflection: &crate::Reflection) {
     let find_first_child_method = strings(NAME, method(|lua, engine, id, args| {
         let name = name_arg(args.get(1));
         let (recursive, mut looked) = (args.boolean(2), 0);
-        let found = find_first_child_counting(engine, id, name.as_ref().map(|s| s.as_bytes()).as_deref(), recursive, &mut looked);
+        let bytes = name.as_ref().map(|s| s.as_bytes());
+        let found = find_first_child_counting(engine, id, bytes.as_deref(), recursive, &mut looked);
         charge_find(engine, looked, recursive);
+        let found = found.or_else(|| bytes.as_deref().and_then(|bytes| super::stand_ins::found_stand_in(engine, id, bytes, recursive)));
         optional_instance(lua, engine, found)
     }));
     behaviors.add_method(base, K::FindFirstChild as NameId, find_first_child_method.clone());

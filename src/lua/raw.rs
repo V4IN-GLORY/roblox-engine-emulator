@@ -1909,6 +1909,7 @@ unsafe fn base_call(state: *mut ffi::lua_State, api: &Api, engine: &Engine, id: 
                 let (recursive, mut looked) = (ffi::lua_toboolean(state, 3) != 0, 0);
                 let found = linstance::find_first_child_counting(engine, id, Some(&name), recursive, &mut looked);
                 linstance::charge_find(engine, looked, recursive);
+                let found = found.or_else(|| super::stand_ins::found_stand_in(engine, id, &name, recursive));
                 push_optional_instance(state, api, engine, found)
             }
             Base::IsA => {

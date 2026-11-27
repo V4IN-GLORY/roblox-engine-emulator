@@ -354,7 +354,12 @@ def typo(name: str, code: str, line: str, earlier: str) -> bool:
 	declared = set(re.findall(r"\blocal\s+(?:function\s+)?(\w+)|\bfunction\s+(?:\w+[.:])?(\w+)", code))
 	# (a name the user's code uses is that code's, however close to one of the answer's own: `template` beside `templated`)
 	candidates = KNOWN_GLOBALS | ({word for pair in declared for word in pair if word} if not re.search(rf"\b{re.escape(name)}\b", earlier) else set())
-	return any(candidate.lower() != lowered and _near(lowered, candidate.lower()) for candidate in candidates)
+	# (a different first letter in a name of the same length is another word, `path` beside `math`; a letter more or less is a
+	# slip, `ask` for `task`)
+	return any(
+		candidate.lower() != lowered and _near(lowered, candidate.lower()) and not (len(candidate) == len(lowered) and candidate[0].lower() != lowered[0])
+		for candidate in candidates
+	)
 
 
 def finish(row: dict, job: dict, where: list[int]) -> dict:

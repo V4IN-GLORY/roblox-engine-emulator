@@ -10,7 +10,6 @@
 //! service that holds no instances of the place's (UserInputService), the DataModel (its services: services/mod.rs
 //! PLACE_SERVICES) or Players and a Player (who joins and what a game script makes under them are the run's).
 
-use std::rc::Rc;
 use std::sync::OnceLock;
 
 use rustc_hash::FxHashSet;
@@ -127,9 +126,24 @@ fn guessed_class(engine: &Engine, parent: InstanceId, name: &str) -> &'static st
     "Folder"
 }
 
+/// FindFirstChild's stand-in: only directly under a service that holds the place's instances or under a stand-in (the place's
+/// content, `ReplicatedStorage:FindFirstChild("BuyItem")` a script uses unchecked), never where finding nothing is an answer a
+/// script asks for (`hit.Parent:FindFirstChild("Humanoid")`), and never for a recursive search
+pub(crate) fn found_stand_in(engine: &Engine, parent: InstanceId, name: &[u8], recursive: bool) -> Option<InstanceId> {
+    if !engine.options.stand_ins || recursive {
+        return None;
+    }
+    let held = {
+        let state = engine.state.borrow();
+        let info = engine.reflection.class(state.dom.class_of(parent));
+        (info.service && CONTAINER_SERVICES.contains(&&*info.name)) || state.output.stand_ins.contains(&state.dom.full_name(&engine.reflection, parent))
+    };
+    if held { stand_in(engine, parent, name) } else { None }
+}
+
 /// A stand-in for the child `name` of `parent` that a lookup missed, made and parented now; None where the option is off or
 /// the name is no child's (module doc)
-pub(crate) fn stand_in(engine: &Rc<Engine>, parent: InstanceId, name: &[u8]) -> Option<InstanceId> {
+pub(crate) fn stand_in(engine: &Engine, parent: InstanceId, name: &[u8]) -> Option<InstanceId> {
     if !engine.options.stand_ins {
         return None;
     }

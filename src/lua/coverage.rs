@@ -3,7 +3,8 @@
 //! the engine to call (connections, callbacks, the handlers of coverage.luau's BINDERS), and after its frames a coverage pass
 //! (record/run.rs) calls each once that the run never called. A server's player joins and every player gets a character first,
 //! so PlayerAdded and CharacterAdded run on the real path; the rest are called with arguments of their reflected parameter
-//! types (fallback.rs's values; a parameter of the player's, the character's, its humanoid's or its leg's class gets that one).
+//! types (fallback.rs's values; a parameter of the player's, the character's, its humanoid's or its leg's class gets that one;
+//! a signal a method made, whose parameters no data records, an instance).
 //! The engine's own Luau (`=rur.*`, `=ree.*` chunks) is never recorded. Lines written meanwhile carry `coverage`.
 
 use std::rc::Rc;
@@ -190,7 +191,15 @@ pub(crate) fn fire(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<usize> {
     };
     let queued = connections.len() + callbacks.len() + bound.len();
     for (connection, signal) in connections {
-        let arguments = arguments(lua, engine, &event_parameters(engine, signal))?;
+        let parameters = event_parameters(engine, signal);
+        let mut arguments = arguments(lua, engine, &parameters)?;
+        // (a signal a method made, CollectionService:GetInstanceAddedSignal's, records no parameters: its handler gets an
+        // instance, which one that takes none ignores)
+        if parameters.is_empty()
+            && let Some(instance) = engine.reflection.class_id("Instance").and_then(|class| sample(engine, class))
+        {
+            arguments.push(convert::from_lua(&instance));
+        }
         let target = JobTarget::Handler { connection, kind: DispatchKind::Signal(crate::cost::SignalKind::Unmeasured) };
         engine.state.borrow_mut().sched.defer_handler(target, arguments, 0.0, signal);
     }
