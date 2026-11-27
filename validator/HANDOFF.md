@@ -14,7 +14,7 @@ We don't need pixel-perfect Roblox. We need **what a script can see** to match R
   ```
 - Run one file: `python validator/validate.py some.luau --context server|client` → `{"ok", "errors", "unemulated"}`.
 - See what's still missing: `python validator/probe/gaps.py --classes Humanoid,ContextActionService`. The probe has blind spots: on a server it lists no Humanoid gaps, yet `TakeDamage` is unemulated there. Your specs are the real check.
-- `validator/specs/Humanoid/TakeDamage.{ok,bad}.luau` are worked examples of the spec format, and both fail today on purpose.
+- `validator/specs/Avatar/TakeDamage.{ok,bad}.luau` are worked examples of the spec format, and both fail today on purpose.
 - Repo's own guide: `AGENTS.md`, `docs/engine.md`, and `docs/cli.md` for run contexts. Read the section for the area you touch.
 
 ## Run contexts (read this first)
@@ -52,32 +52,24 @@ Every call first checks its arguments like Roblox (ArgChecks). After that:
 
 ## Plan
 
-| # | step | who | depends on |
+| # | step | who | state |
 |---|---|---|---|
-| 0 | Measure: surface probe, server + client captures, crash list (`expected/crashes.txt`), valid-call return types (`cv`) | orchestrator | done |
-| 1a | [ArgChecks](packages/ArgChecks.md): every method checks args like Roblox | Opus | 0 |
-| 1b | [ClassReach](packages/ClassReach.md): hidden services, default instances, enums, `User` | Gemini | 0 |
-| 1c | [PropertyAccess](packages/PropertyAccess.md): write error rules, nil reads | Gemini | 1a (shares `raw.rs`) |
-| 1d | [Fallback](packages/Fallback.md) (tier 3): methods return what Roblox returns, `stubbed` field in validate.py; inherited behaviours a subclass misses | Opus | 1a |
-| 2 | Behaviour packages (tier 2), table below, on top of 1a | Gemini each | 1a, 1d |
-| 3 | Coverage: fire every connected handler once after a run with typed fake args; luau-lsp static check as a `warnings` field | Opus | 1a |
-| 4 | API dump bump to 0.748 (the 48 members ree doesn't know yet), re-capture | orchestrator | after 1-3 land |
-| 5 | Dataset scale: many rows per ree process (`--batch`), timing per row | orchestrator | 1-3 |
-| 6 | Upstream PRs to REE: one change per PR (AGENTS.md), each with tests, `docs/engine.md`, the capture as measurement, AI disclosure. Only when the user says so | orchestrator | user's go |
+| 0 | Measure: surface probe, server + client captures, crash list, valid-call return types (`cv`) | orchestrator | done |
+| 1 | [ArgChecks](packages/ArgChecks.md), [ClassReach](packages/ClassReach.md), [PropertyAccess](packages/PropertyAccess.md), [Fallback](packages/Fallback.md) (tier 3), API dump 0.748, optional parameters from the creator docs | agents + orchestrator | done |
+| 2 | [DocsSupplement](packages/DocsSupplement.md): classes the dump leaves out (`Player`, settings, network) and property write permissions, from the creator docs | Gemini | |
+| 2 | [Behaviours](packages/Behaviours.md) (tier 2): Commerce, Avatar, World, Interface, Core, one agent each | Gemini | |
+| 2 | [Coverage](packages/Coverage.md): fire every connected handler once with typed args; luau-lsp `warnings` | Opus | |
+| 3 | Dataset scale: many rows per ree process (`--batch`), timing per row | orchestrator | after 2 |
+| 4 | Upstream PRs to REE: one change per PR (AGENTS.md), each with tests, `docs/engine.md`, the capture as measurement, AI disclosure. Only when the user says so | orchestrator | user's go |
 
 Done for the whole thing: `surface_diff.py` shows only lines left on purpose (each listed with why), the behaviour
 packages' specs pass, `cargo test --release` and the parity probes pass.
 
 ## Packages: one agent each
 
-| package | file you own | brief |
-|---|---|---|
-| Humanoid | `src/lua/validator/Humanoid.luau` | [packages/Humanoid.md](packages/Humanoid.md) |
-| ClientInput | `src/lua/validator/ClientInput.luau` | [packages/ClientInput.md](packages/ClientInput.md) |
-| Commerce | `src/lua/validator/Commerce.luau` | [packages/Commerce.md](packages/Commerce.md) |
-| ContextGuards | `src/lua/validator/ContextGuards.luau` | [packages/ContextGuards.md](packages/ContextGuards.md) |
-| Pathfinding | `src/lua/validator/Pathfinding.luau` | [packages/Pathfinding.md](packages/Pathfinding.md) |
-| Misc | `src/lua/validator/Misc.luau` | [packages/Misc.md](packages/Misc.md) |
+Brief for all five: [packages/Behaviours.md](packages/Behaviours.md) (which classes each owns). File:
+`src/lua/validator/<Package>.luau`; specs: `validator/specs/<Package>/`. Packages: Commerce, Avatar, World, Interface,
+Core.
 
 ### The contract (frozen, don't change it, report BLOCKED instead)
 

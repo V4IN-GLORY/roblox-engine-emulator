@@ -17,12 +17,11 @@ pub(crate) static PROFILE: &str = include_str!("profile.luau");
 /// Validator extensions (validator/HANDOFF.md): one file per API area, loaded after the stock services so a file can
 /// replace a stock stub. Every file runs in every run context and checks R.IsServer itself.
 pub(crate) static VALIDATOR: &[(&str, &str)] = &[
-    ("=ree.validator.Humanoid", include_str!("validator/Humanoid.luau")),
-    ("=ree.validator.ClientInput", include_str!("validator/ClientInput.luau")),
     ("=ree.validator.Commerce", include_str!("validator/Commerce.luau")),
-    ("=ree.validator.ContextGuards", include_str!("validator/ContextGuards.luau")),
-    ("=ree.validator.Pathfinding", include_str!("validator/Pathfinding.luau")),
-    ("=ree.validator.Misc", include_str!("validator/Misc.luau")),
+    ("=ree.validator.Avatar", include_str!("validator/Avatar.luau")),
+    ("=ree.validator.World", include_str!("validator/World.luau")),
+    ("=ree.validator.Interface", include_str!("validator/Interface.luau")),
+    ("=ree.validator.Core", include_str!("validator/Core.luau")),
 ];
 
 /// The named registry value holding server.luau's R.SetJoinData (a server run's only): what
