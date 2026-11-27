@@ -768,6 +768,15 @@ pub(crate) fn abi_info() -> &'static ([u8; 32], String) {
             material.extend_from_slice(&(bc.len() as u32).to_le_bytes());
             material.extend_from_slice(&bc);
         }
+        // (syntax a flag turns on, `--luau-flag`: a source that compiled with it must not be served to a run without it)
+        const SYNTAX_PROBE: &str = "if local a = 1 then end
+while local b = nil do end
+";
+        material.push(0xfe);
+        if let Ok(bc) = super::compiler().compile(SYNTAX_PROBE) {
+            material.extend_from_slice(&(bc.len() as u32).to_le_bytes());
+            material.extend_from_slice(&bc);
+        }
         let digest = sha256(&material);
         let tag = format!("v{FORMAT_VERSION}-{}", hex8(&digest));
         (digest, tag)
@@ -843,10 +852,22 @@ pub(crate) fn flush_all_now() {
     for_each_store(|store| store.flush());
 }
 
+/// The `--luau-flag`s a process set (launch.rs), which change what a source compiles to: each entry's key holds them, so a
+/// source compiled with one is never served to a run without it (whenever the process opened its store)
+static FLAG_SALT: std::sync::RwLock<Vec<u8>> = std::sync::RwLock::new(Vec::new());
+
+pub(crate) fn salt_with_flag(flag: &str) {
+    if let Ok(mut salt) = FLAG_SALT.write() {
+        salt.extend_from_slice(flag.as_bytes());
+        salt.push(0);
+    }
+}
+
 /// Content hash key for a source buffer and artifact kind.
 #[inline]
 pub(crate) fn key_for(kind: u8, source: &[u8]) -> EntryKey {
-    EntryKey { kind, hash: sha256(source), source_len: source.len() as u64 }
+    let salted = FLAG_SALT.read().ok().filter(|salt| !salt.is_empty()).map(|salt| sha256(&[source, &salt[..]].concat()));
+    EntryKey { kind, hash: salted.unwrap_or_else(|| sha256(source)), source_len: source.len() as u64 }
 }
 
 /// SHA-256 digest of `bytes`. Uses `sha2` when feature `bundles` is enabled and a matching

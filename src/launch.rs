@@ -187,12 +187,32 @@ pub struct Args {
     pub fire_handlers: bool,
     /// `--max-output-lines <n>` ([`crate::Options::max_output_lines`])
     pub max_output_lines: Option<usize>,
+    /// `--stand-ins` ([`crate::Options::stand_ins`])
+    pub stand_ins: bool,
 }
 
 fn size(key: &str, text: &str) -> Result<(f64, f64), String> {
     let (w, h) = text.split_once(['x', 'X']).ok_or_else(|| format!("{key} needs WxH"))?;
     let number = |text: &str| text.parse::<f64>().map_err(|_| format!("{key}: not a number"));
     Ok((number(w)?, number(h)?))
+}
+
+/// `--luau-flag <Name>=<true|false>`: sets one of the VM's own flags for the process, over the live client's value (a syntax
+/// Luau has that the client runs off, such as `LuauExperimentalIfLocalSyntax`: `if local x = f() then`). Every engine of
+/// the process compiles with it from then on.
+fn set_luau_flag(text: &str) -> Result<(), String> {
+    let (name, value) = text.split_once('=').ok_or_else(|| format!("--luau-flag {text}: expected <Name>=<true|false>"))?;
+    let value = match value {
+        "true" => 1,
+        "false" => 0,
+        _ => return Err(format!("--luau-flag {text}: expected true or false")),
+    };
+    let name = std::ffi::CString::new(name).map_err(|_| format!("--luau-flag {text}: not a flag name"))?;
+    if unsafe { mlua::ffi::luau_setfflag(name.as_ptr(), value) } == 0 {
+        return Err(format!("--luau-flag {text}: the vendored Luau has no flag of that name"));
+    }
+    crate::lua::modules::store::salt_with_flag(text);
+    Ok(())
 }
 
 impl Args {
@@ -209,6 +229,8 @@ impl Args {
             "--load-string" => self.load_string = true,
             "--native" => self.native = true,
             "--fire-handlers" => self.fire_handlers = true,
+            "--stand-ins" => self.stand_ins = true,
+            "--luau-flag" => set_luau_flag(&need()?)?,
             "--max-output-lines" => self.max_output_lines = Some(need()?.parse().map_err(|_| "--max-output-lines: not a count".to_string())?),
             "--roots" => self.roots = need()?.split(';').filter(|r| !r.is_empty()).map(str::to_string).collect(),
             "--project" => self.project = Some(need()?),
@@ -240,7 +262,7 @@ impl Args {
             "--client-profile" => self.client_profiles.push(need()?),
             _ => return Ok(None),
         }
-        Ok(Some(if matches!(key, "--offline" | "--verbose" | "--no-snapshots" | "--load-module" | "--load-string" | "--native" | "--fire-handlers") { 1 } else { 2 }))
+        Ok(Some(if matches!(key, "--offline" | "--verbose" | "--no-snapshots" | "--load-module" | "--load-string" | "--native" | "--fire-handlers" | "--stand-ins") { 1 } else { 2 }))
     }
 }
 
@@ -375,6 +397,7 @@ pub fn prepare(args: &Args, default_repo: &Path) -> Result<Prepared, String> {
         clock_probe: None,
         fire_handlers: args.fire_handlers,
         max_output_lines: args.max_output_lines,
+        stand_ins: args.stand_ins,
     };
     let mounts = args
         .mounts

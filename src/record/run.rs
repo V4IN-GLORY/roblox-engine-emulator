@@ -873,6 +873,9 @@ pub(crate) fn run_done(emulator: &Emulator, args: &RecordArgs, host: &Host, ran:
     if dropped > 0 {
         summary["outputDropped"] = json!(dropped);
     }
+    if engine.options.stand_ins {
+        summary["standIns"] = json!(engine.state.borrow().output.stand_ins);
+    }
     if let Some(loopback) = crate::loopback::summary(engine) {
         summary["runContext"] = json!("loopback");
         summary["loopback"] = loopback;

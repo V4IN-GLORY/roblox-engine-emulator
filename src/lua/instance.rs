@@ -351,6 +351,9 @@ pub fn get(lua: &Lua, engine: &Rc<Engine>, id: InstanceId, key: &LuaValue) -> Re
     {
         return value;
     }
+    if let Some(child) = super::stand_ins::stand_in(engine, id, &key_bytes) {
+        return Ok(instance_value(lua, engine, child)?);
+    }
     Err(not_a_member(engine, id, key))
 }
 
@@ -1185,7 +1188,7 @@ fn wait_for_child(lua: &Lua, engine: &Rc<Engine>, id: InstanceId, args: &Args) -
         } else {
             super::globals::missing_child(lua, engine, id, &s.as_bytes())?
         };
-        if let Some(child) = found {
+        if let Some(child) = found.or_else(|| super::stand_ins::stand_in(engine, id, &s.as_bytes())) {
             return optional_instance(lua, engine, Some(child));
         }
     }

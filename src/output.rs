@@ -97,6 +97,8 @@ pub struct Output {
     pub cap: Option<usize>,
     kept: usize,
     pub dropped: u64,
+    /// `--stand-ins`: the full names of the stand-ins made, in order (lua/stand_ins.rs)
+    pub stand_ins: Vec<String>,
 }
 
 /// The engine whose list a loopback server's lines go to ([`Output::forward`])

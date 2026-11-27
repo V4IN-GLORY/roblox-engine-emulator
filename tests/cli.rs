@@ -13,3 +13,6 @@ mod what_if;
 
 #[path = "cli/client_profile.rs"]
 mod client_profile;
+
+#[path = "cli/validator.rs"]
+mod validator;

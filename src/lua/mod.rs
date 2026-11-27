@@ -14,6 +14,7 @@ pub mod builtins;
 pub mod cfunction;
 pub mod convert;
 pub(crate) mod coverage;
+pub(crate) mod stand_ins;
 pub mod curve_keys;
 mod fallback;
 pub mod float_mode;

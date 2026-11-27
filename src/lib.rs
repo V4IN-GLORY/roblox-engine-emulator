@@ -169,6 +169,9 @@ pub struct Options {
     /// `--max-output-lines <n>`: a run keeps at most this many output lines and stops at the end of the frame that reached
     /// them (a script that errors in a tight loop); the summary's `outputDropped` counts the rest. None: every line
     pub max_output_lines: Option<usize>,
+    /// `--stand-ins`: a lookup by name that finds no child makes a stand-in of it (lua/stand_ins.rs), so a script that expects
+    /// the place to hold it goes on; the summary's `standIns` lists them
+    pub stand_ins: bool,
 }
 
 impl Default for Options {
@@ -193,6 +196,7 @@ impl Default for Options {
             clock_probe: None,
             fire_handlers: false,
             max_output_lines: None,
+            stand_ins: false,
         }
     }
 }

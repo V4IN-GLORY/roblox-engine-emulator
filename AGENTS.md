@@ -69,6 +69,12 @@ nearly every file.
 
 ### Rules of this engine
 
+- **Luau is newer than a model's training data.** `const x = 5` is real (it compiles in a Studio 0.748 game script), and so
+  are `if local x = f() then` and `while local x = f() do` (the vendored Luau 0.748 has them behind
+  `LuauExperimentalIfLocalSyntax` / `LuauExperimentalWhileLocalSyntax`; the live 0.748 client leaves those off, and
+  `validator/validate.py` turns them on with `ree run --luau-flag`). Never call Luau syntax invalid from memory: read the
+  vendored parser (`vendor/luau0-src/luau/Ast/src/Parser.cpp`) and its flags first, and update this line when you find more.
+
 - **Parity first.** Script-visible behaviour follows Roblox Studio as measured (cite the measurement in a comment or in
   docs/engine.md), else Roblox's documentation, said as such. Nothing is guessed silently: a member that is not
   emulated reports itself (Output `missing`).
