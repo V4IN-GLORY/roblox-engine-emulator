@@ -1,0 +1,5 @@
+local Players = game:GetService("Players")
+local model = Instance.new("Model")
+assert(Players:GetPlayerFromCharacter(model) == nil)
+local info = Players:GetCharacterAppearanceInfoAsync(1)
+assert(type(info) == "table")
