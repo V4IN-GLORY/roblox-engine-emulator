@@ -1,0 +1,5 @@
+local remote = Instance.new("RemoteEvent")
+remote.Parent = game:GetService("ReplicatedStorage")
+remote.OnClientEvent:Connect(function(message)
+	print(message)
+end)

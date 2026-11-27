@@ -346,17 +346,30 @@ pub fn deliver_event(lua: &Lua, engine: &Rc<Engine>, endpoint: &Rc<Endpoint>, re
     Ok(())
 }
 
-/// A connection was made to `signal` (lua/types.rs Connect): when it is a remote's event with events waiting, they go to
-/// this connection, in order. On the wrong side Connect is refused first (`OnServerEvent can only be used on the server`).
+/// The side a run's scripts are on: a loopback run's engine's, else a server or client run's (an edit run is both: none)
+fn run_side(engine: &Engine) -> Option<Side> {
+    if let Some(endpoint) = engine.loopback() {
+        return Some(endpoint.side);
+    }
+    match engine.options.run_context {
+        crate::RunContext::Server => Some(Side::Server),
+        crate::RunContext::Client => Some(Side::Client),
+        _ => None,
+    }
+}
+
+/// A connection is being made to `signal` (lua/types.rs Connect): on the wrong side it is refused (`OnServerEvent can only be
+/// used on the server`), in a loopback run and in a server or client run alike (measured in a 0.748 play session's two sides:
+/// a parented RemoteEvent's)
 pub fn connecting(engine: &Engine, signal: SignalId) -> Result<(), Flow> {
-    let Some(endpoint) = engine.loopback() else { return Ok(()) };
+    let Some(side) = run_side(engine) else { return Ok(()) };
     let label = engine.state.borrow().signals.get(signal).label.clone();
     let label = label.as_bytes();
     let (server_only, client_only) = (label.ends_with(b".OnServerEvent"), label.ends_with(b".OnClientEvent"));
-    if server_only && endpoint.side == Side::Client {
+    if server_only && side == Side::Client {
         return raise("OnServerEvent can only be used on the server");
     }
-    if client_only && endpoint.side == Side::Server {
+    if client_only && side == Side::Server {
         return raise("OnClientEvent can only be used on the client");
     }
     Ok(())
@@ -373,10 +386,10 @@ pub fn connected(engine: &Engine, signal: SignalId, connection: ConnectionId) {
     }
 }
 
-/// A callback member is being set (lua/instance.rs): refused on the wrong side
+/// A callback member is being set (lua/instance.rs): refused on the wrong side, in any server or client run
 pub fn setting_callback(engine: &Engine, name: NameId) -> Result<(), Flow> {
-    let Some(endpoint) = engine.loopback() else { return Ok(()) };
-    match (engine.reflection.name(name), endpoint.side) {
+    let Some(side) = run_side(engine) else { return Ok(()) };
+    match (engine.reflection.name(name), side) {
         ("OnServerInvoke", Side::Client) => raise("OnServerInvoke can only be implemented on the server"),
         ("OnClientInvoke", Side::Server) => raise("OnClientInvoke can only be implemented on the client"),
         _ => Ok(()),

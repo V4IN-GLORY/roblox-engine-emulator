@@ -1014,3 +1014,10 @@ Method("WrapTextureTransfer", "PrepareProjectionMeshDataAsync", function(Self)
 	end
 	task.wait()
 end)
+
+-- (a server's player has no mouse: nil, measured in a 0.748 play session's server)
+if IsServer then
+	Method("Player", "GetMouse", function()
+		return nil
+	end)
+end

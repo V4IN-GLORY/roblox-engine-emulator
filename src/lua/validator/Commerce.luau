@@ -203,7 +203,7 @@ end
 local function AwardBadgeImpl(Name)
 	return function(_, UserId, BadgeId)
 		if not IsServer then
-			error(`BadgeService:{Name} can only be called from the server`, 0) -- text: docs
+			return false -- (a client is refused quietly: false, measured in a 0.748 play session's client)
 		end
 		task.wait()
 		local UserBadges = AwardedBadges[UserId]
@@ -354,7 +354,7 @@ end)
 local KnownDataStores = {}
 
 if IsServer then
-	local OrigGetDataStore = Create("DataStoreService").GetDataStore
+	local OrigGetDataStore = R.Stock("DataStoreService", "GetDataStore")
 	Method("DataStoreService", "GetDataStore", function(Self, Name, Scope, Options)
 		if Options ~= nil and (typeof(Options) ~= "Instance" or not Options:IsA("DataStoreOptions")) then
 			error("510: Options instance not of type DataStoreOptions", 0)
@@ -807,7 +807,7 @@ Method("PolicyService", "CanViewBrandProjectAsync", function(_, Player, _BrandPr
 end)
 
 -- the stock method (services.luau) answers the client profile's policy; Roblox also refuses a non-player
-local GetPolicyInfo = Create("PolicyService").GetPolicyInfoForPlayerAsync
+local GetPolicyInfo = R.Stock("PolicyService", "GetPolicyInfoForPlayerAsync")
 Method("PolicyService", "GetPolicyInfoForPlayerAsync", function(Self, Player)
 	if not IsPlayer(Player) then
 		error("Instance was not a player", 0)

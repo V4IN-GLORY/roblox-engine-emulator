@@ -462,6 +462,7 @@ fn messages_reach_subscribers_and_remotes_reach_no_client() {
         local Player = Instance.new("Player")
         Player.Parent = Players
         local Remote = Instance.new("RemoteEvent")
+        Remote.Parent = game:GetService("ReplicatedStorage")
         Remote.OnServerEvent:Connect(function() end)
         Remote:FireClient(Player, 1)
         Remote:FireAllClients(2)
@@ -469,7 +470,9 @@ fn messages_reach_subscribers_and_remotes_reach_no_client() {
         print("fire server", (select(2, pcall(Remote.FireServer, Remote))))
         print("fire client", (select(2, pcall(Remote.FireClient, Remote, workspace))))
         local Function = Instance.new("RemoteFunction")
-        print("invoke server", (select(2, pcall(Function.InvokeServer, Function))))
+        local Placed = Instance.new("RemoteFunction")
+        Placed.Parent = game:GetService("ReplicatedStorage")
+        print("invoke server", (select(2, pcall(Placed.InvokeServer, Placed))))
         local Answered = false
         task.spawn(function()
             local Ok, Message = pcall(Function.InvokeClient, Function, Player, 1)
@@ -484,9 +487,9 @@ fn messages_reach_subscribers_and_remotes_reach_no_client() {
     );
     for wanted in [
         "print: messages 1:number",
-        "print: fire server Test:21: FireServer can only be called from the client",
-        "print: fire client Test:22: FireClient: player argument must be a Player object",
-        "print: invoke server Test:24: InvokeServer can only be called from the client",
+        "print: fire server FireServer can only be called from the client",
+        "print: fire client Test:23: FireClient: player argument must be a Player object",
+        "print: invoke server InvokeServer can only be called from the client",
         "print: waiting false",
         "print: invoke client false InvokeClient: Player left the game before RemoteFunction returned",
     ] {

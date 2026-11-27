@@ -201,6 +201,14 @@ pub fn load(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
             instance_value(lua, &e, id)
         })?,
     )?;
+    // R.Stock(class, name): the method a class has now, before a later file replaces it (a validator file that wraps the stock
+    // behaviour). One instance per class, kept for the run: one made per call and dropped would leave the collector an
+    // orphan to take mid-run, which a profile's instance count sees.
+    let stock: LuaFunction = lua
+        .load("local Create = ... local Kept = {} return function(ClassName, Name) local Held = Kept[ClassName] if not Held then Held = Create(ClassName) Kept[ClassName] = Held end return Held[Name] end")
+        .set_name("=rur.stock")
+        .call(r.get::<LuaFunction>("Create")?)?;
+    r.set("Stock", stock)?;
     let e = engine.clone();
     r.set(
         "RawSet",
@@ -358,6 +366,16 @@ pub fn load(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
         "Missing",
         super::lua_fn(lua, move |lua, (class_name, member): (String, String)| {
             e.missing(Some(lua), &class_name, &member);
+            Ok(())
+        })?,
+    )?;
+    let e = engine.clone();
+    // R.Stubbed(class, member): an Output `stubbed` line, for a member that does what Roblox does without the rest of a session
+    // (a server's FireClient with no client to reach) rather than not being emulated
+    r.set(
+        "Stubbed",
+        super::lua_fn(lua, move |lua, (class_name, member): (String, String)| {
+            e.stubbed(lua, &format!("{class_name}.{member}"));
             Ok(())
         })?,
     )?;

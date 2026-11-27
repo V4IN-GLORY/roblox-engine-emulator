@@ -88,6 +88,10 @@ for _, Name in { "BindToMessage", "BindToMessageParallel" } do
 			error(`{Name} is being executed from a ModuleScript, which requires the ModuleScript to be a descendant of the desired Actor. If you intended to call this function from the ModuleScript's requirer, please consider exporting a function that calls {Name} instead.`, 0)
 		end
 		local Event = ActorTopicEvent(Self, Topic, true)
+		-- (a parallel binding's handler runs desynchronized, with the parallel phase's rules)
+		if Name == "BindToMessageParallel" then
+			return Event.Event:ConnectParallel(Callback)
+		end
 		return Event.Event:Connect(Callback)
 	end)
 end

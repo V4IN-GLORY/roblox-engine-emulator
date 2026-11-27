@@ -6940,7 +6940,8 @@ fn script_callbacks_are_assignable() {
         r#"
         local Remote = Instance.new("RemoteFunction")
         Remote.OnClientInvoke = function() return 1 end
-        Remote.OnServerInvoke = function() return 2 end
+        local Refused, Message = pcall(function() Remote.OnServerInvoke = function() return 2 end end)
+        assert(not Refused and string.find(Message, "OnServerInvoke can only be implemented on the server", 1, true), Message)
         Remote.OnClientInvoke = nil
         local Ok, Message = pcall(function() return Remote.OnClientInvoke end)
         assert(not Ok and string.find(Message, "OnClientInvoke is a callback member of RemoteFunction; you can only set the callback value, get is not available", 1, true), Message)
@@ -7085,6 +7086,86 @@ fn actors_run_their_scripts_in_a_vm_of_their_own_in_studios_order() {
         "Actor1 heartbeat",
     ];
     assert_eq!(log, expected);
+}
+
+/// A server runs a Script under an Actor in ServerScriptService in the Actor's VM, and a desynchronized thread is refused what
+/// is not thread safe in Roblox's own words (measured in Studio 0.748, a server Script under an Actor, the same calls in a
+/// Heartbeat ConnectParallel handler): a method the dump gives no CallParallel, any property write (an unparented part's
+/// too), any event read; reads, thread-safe methods, Instance.new and task.wait run, a thread that waited resumes still
+/// desynchronized, and task.synchronize lifts it all.
+#[test]
+fn a_desynchronized_thread_is_refused_what_is_not_thread_safe() {
+    let (lua, engine) = start_with(Options { mode: "play".into(), run_context: crate::RunContext::Server, ..Options::default() });
+    crate::scheduler::step(&lua, &engine, Some(1.0 / 60.0)).expect("step");
+    run(
+        &lua,
+        &engine,
+        r##"
+        SharedTable.update(game:GetService("SharedTableRegistry"):GetSharedTable("Parallel"), "N", function() return 0 end)
+        local Actor = Instance.new("Actor")
+        local Worker = Instance.new("Script")
+        Worker.Source = [==[
+            local Shared = game:GetService("SharedTableRegistry"):GetSharedTable("Parallel")
+            local Part = Instance.new("Part")
+            Part.Parent = script.Parent
+            local Fresh = Instance.new("Part")
+            local function Try(Label, Fn)
+                local Ok, Message = pcall(Fn)
+                local Index = SharedTable.increment(Shared, "N", 1) + 1
+                Shared["L" .. Index] = Label .. " " .. tostring(Ok) .. " " .. tostring(Message)
+            end
+            local Done = false
+            game:GetService("RunService").Heartbeat:ConnectParallel(function()
+                if Done then return end
+                Done = true
+                Try("read", function() return Part.Name end)
+                Try("write", function() Part.Transparency = 0.5 end)
+                Try("fresh", function() Fresh.Name = "Y" end)
+                Try("destroy", function() Fresh:Destroy() end)
+                Try("children", function() return #Part:GetChildren() end)
+                Try("new", function() return Instance.new("Part").ClassName end)
+                Try("event", function() return Part.Touched end)
+                Try("wait", function() task.wait() end)
+                Try("service", function() return game:GetService("Players") end)
+                task.synchronize()
+                Try("synchronized", function() Part.Name = "Z" end)
+            end)
+        ]==]
+        Worker.Parent = Actor
+        Actor.Parent = game:GetService("ServerScriptService")
+        "##,
+    );
+    for _ in 0..4 {
+        crate::scheduler::step(&lua, &engine, Some(1.0 / 60.0)).expect("step");
+    }
+    let output = run(
+        &lua,
+        &engine,
+        r##"
+        local Shared = game:GetService("SharedTableRegistry"):GetSharedTable("Parallel")
+        local Lines = {}
+        for Index = 1, SharedTable.size(Shared) do
+            if Shared["L" .. Index] then table.insert(Lines, Shared["L" .. Index]) end
+        end
+        print(table.concat(Lines, "|"))
+        "##,
+    );
+    let log = output.iter().find_map(|line| line.strip_prefix("print: ")).expect("a log").to_string();
+    assert_eq!(
+        log.split('|').collect::<Vec<_>>(),
+        [
+            "read true Part",
+            "write false Property BasePart.Transparency is not safe to write in parallel",
+            "fresh false Property Instance.Name is not safe to write in parallel",
+            "destroy false Function Instance.Destroy is not safe to call in parallel",
+            "children true 0",
+            "new true Part",
+            "event false Event BasePart.Touched is not safe to access in parallel",
+            "wait true nil",
+            "service false Function ServiceProvider.GetService is not safe to call in parallel",
+            "synchronized true nil",
+        ]
+    );
 }
 
 /// Script.Source and Script.RunContext are plugin-writable in Studio. Edit mode, which runs plugin code, sets both, and a
@@ -12815,7 +12896,7 @@ fn methods_new_in_0_747_report_themselves_as_not_emulated() {
     let missing: Vec<String> = engine.state.borrow().output.missing.iter().map(|(name, _)| name.clone()).collect();
     assert_eq!(
         missing,
-        ["CollectionService.GetCollections", "RunService.BindToSimulationParallel", "ParticleEmitter2D.Emit", "ParticleEmitter2D.Clear", "Sound.GetPlaybackState", "TextDocument.ReadAsync"]
+        ["CollectionService.GetCollections", "ParticleEmitter2D.Emit", "ParticleEmitter2D.Clear", "Sound.GetPlaybackState", "TextDocument.ReadAsync"]
     );
 }
 
@@ -15381,7 +15462,6 @@ fn unemulated_methods_answer_a_default_of_their_return_type() {
             "stubbed: BasePart.GetRootPart is not emulated",
             "stubbed: BasePart.BreakJoints is not emulated",
             "stubbed: VRService.GetTouchpadMode is not emulated",
-            "stubbed: StyleRule.GetProperty is not emulated",
             "stubbed: RunService.BindToSimulation is not emulated",
             "stubbed: AssetService.GetAssetIdsForPackageAsync is not emulated",
         ],

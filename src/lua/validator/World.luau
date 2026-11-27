@@ -122,7 +122,7 @@ Method("AssetService", "CreateDecalAsync", function(_, Maps)
 end)
 
 -- the stock method (services.luau) does the work; Roblox also refuses a table naming no map
-local CreateSurfaceAppearance = Create("AssetService").CreateSurfaceAppearanceAsync
+local CreateSurfaceAppearance = R.Stock("AssetService", "CreateSurfaceAppearanceAsync")
 Method("AssetService", "CreateSurfaceAppearanceAsync", function(Self, Maps)
 	for _, Key in SURFACE_MAP_KEYS do
 		if Maps[Key] ~= nil then
@@ -133,7 +133,7 @@ Method("AssetService", "CreateSurfaceAppearanceAsync", function(Self, Maps)
 end)
 
 -- the Rust method (meshes.rs) loads what the run has; an asset it could only download answers a part, as a live game would
-local CreateMeshPart = Create("AssetService").CreateMeshPartAsync
+local CreateMeshPart = R.Stock("AssetService", "CreateMeshPartAsync")
 Method("AssetService", "CreateMeshPartAsync", function(Self, Source, Settings)
 	local Ok, Result = pcall(CreateMeshPart, Self, Source, Settings)
 	if Ok then
@@ -291,7 +291,7 @@ end)
 
 -- MeshPart
 
-local ApplyMesh = Create("MeshPart").ApplyMesh
+local ApplyMesh = R.Stock("MeshPart", "ApplyMesh")
 Method("MeshPart", "ApplyMesh", function(Self, Source)
 	if not Source:IsA("MeshPart") then
 		error("ApplyMesh requires an MeshPart object", 0)

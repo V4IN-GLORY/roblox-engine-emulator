@@ -1550,6 +1550,15 @@ fn run_job(lua: &Lua, engine: &Rc<Engine>, job: Job) -> LuaResult<()> {
                 if let Some(site) = census {
                     crate::census::handler_ran(site, &thread);
                 }
+                // (a ConnectParallel handler of a deferred event, an Actor's message: it runs desynchronized, a phase of its own)
+                if engine.state.borrow().signals.is_parallel(connection) {
+                    if engine.options.fire_handlers {
+                        crate::lua::coverage::ran(engine, connection);
+                    }
+                    crate::lua::actors::parallel_phase(lua, engine, vec![(thread.clone(), args)]);
+                    end_handler_sample(sample, &thread);
+                    return Ok(());
+                }
                 let dispatch = DispatchPrice { seconds: job.resume_cost, kind };
                 run_handler(lua, engine, connection, signal, &thread, args, dispatch);
                 end_handler_sample(sample, &thread);

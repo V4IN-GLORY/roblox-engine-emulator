@@ -788,6 +788,9 @@ pub fn fire_immediate_costing(lua: &Lua, engine: &Rc<Engine>, signal: SignalId, 
                 let callback = engine.state.borrow_mut().signals.begin_handler(connection);
                 if let Some((callback, signal)) = callback {
                     if is_parallel {
+                        if engine.options.fire_handlers {
+                            super::coverage::ran(engine, connection);
+                        }
                         parallel.push((lua.create_thread(callback)?, values));
                         continue;
                     }

@@ -1294,7 +1294,7 @@ Method("AssetService", "LoadAssetAsync", function(_, AssetId)
 end)
 
 -- Remotes, the server's side: no client runs here, so FireClient and FireAllClients (to players) send nothing and InvokeClient waits
--- until the player leaves, then raises, each reporting itself (Output missing); the client-only calls raise as Roblox's do.
+-- until the player leaves, then raises, each reporting itself (Output stubbed); the client-only calls raise as Roblox's do.
 
 local function IsPlayer(Value)
 	return typeof(Value) == "Instance" and Value:IsA("Player")
@@ -1305,21 +1305,29 @@ for _, Class in { "RemoteEvent", "UnreliableRemoteEvent" } do
 		if not IsPlayer(Player) then
 			Raise("FireClient: player argument must be a Player object")
 		end
-		Missing(Class, "FireClient")
+		R.Stubbed(Class, "FireClient")
 	end)
-	Method(Class, "FireAllClients", function() if #R.Children(Players) > 0 then Missing(Class, "FireAllClients") end end) -- (with no player, it reaches no one, as in a client)
-	Method(Class, "FireServer", function()
-		Raise("FireServer can only be called from the client")
+	Method(Class, "FireAllClients", function() if #R.Children(Players) > 0 then R.Stubbed(Class, "FireAllClients") end end) -- (with no player, it reaches no one, as in a client)
+	-- (a remote in the DataModel refuses, with no position; one outside it refuses nothing and sends nothing: measured in a 0.748
+	-- play session's server)
+	Method(Class, "FireServer", function(Self)
+		if Self:IsDescendantOf(game) then
+			error("FireServer can only be called from the client", 0)
+		end
 	end)
 end
-Method("RemoteFunction", "InvokeServer", function()
-	if not coroutine.isyieldable() then error("thread is not yieldable", 0) end Raise("InvokeServer can only be called from the client") -- (the refusal first: tools/parity/probes/yield_refused.luau)
+Method("RemoteFunction", "InvokeServer", function(Self)
+	if not coroutine.isyieldable() then error("thread is not yieldable", 0) end -- (the refusal first: tools/parity/probes/yield_refused.luau)
+	if Self:IsDescendantOf(game) then
+		error("InvokeServer can only be called from the client", 0)
+	end
+	coroutine.yield() -- (no server answers it: the call waits for good, as the measured one did)
 end)
 Method("RemoteFunction", "InvokeClient", function(Self, Player)
 	if Player == nil then error("Argument 1 missing or nil", 0) elseif not IsPlayer(Player) then -- (nil, then the refusal: tools/parity/probes/yield_refused.luau)
 		Raise("InvokeClient: player argument must be a Player object")
 	end
-	if not coroutine.isyieldable() then error("thread is not yieldable", 0) end if Player.Parent == Players then Missing("RemoteFunction", "InvokeClient")
+	if not coroutine.isyieldable() then error("thread is not yieldable", 0) end if Player.Parent == Players then R.Stubbed("RemoteFunction", "InvokeClient")
 		local Thread = coroutine.running()
 		local Connection
 		Connection = Players.PlayerRemoving:Connect(function(Leaving)

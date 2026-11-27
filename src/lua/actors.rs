@@ -2,7 +2,8 @@
 //!
 //! An Actor's scripts have their own `_G` and their own copy of every module they require (modules.rs
 //! `Vm`, prelude.luau `Environment`). A Script (RunContext Client) or LocalScript that is enabled and
-//! under an Actor in the DataModel starts when it gets there, inside the assignment that put it there
+//! under an Actor in the DataModel starts when it gets there (on a server, a Script that would run there: Legacy under
+//! Workspace or ServerScriptService, or Server outside ServerStorage), inside the assignment that put it there
 //! ([`start_under`]; measured in a Studio client: the worker's first lines print before the line after
 //! `Actor.Parent = ...`).
 //!
@@ -48,30 +49,36 @@ pub fn any_actor(engine: &Engine) -> bool {
 /// RunContext Client. Pairs of (actor, script). A server (`--run-context server`) runs no client script, and its own
 /// Scripts are the harness's to start, as everywhere else in the DataModel.
 fn startable(engine: &Engine, ids: &[InstanceId]) -> Vec<(InstanceId, InstanceId)> {
-    if engine.options.server() {
-        return Vec::new();
-    }
+    let server = engine.options.server();
     let (Some(script_class), Some(local_class)) = (engine.class_id("Script"), engine.class_id("LocalScript")) else { return Vec::new() };
     let (Some(enabled), Some(run_context)) = (engine.reflection.name_id("Enabled"), engine.reflection.name_id("RunContext")) else { return Vec::new() };
-    let client = engine.reflection.enum_item("RunContext", "Client");
+    let item = |name: &str| engine.reflection.enum_item("RunContext", name);
+    let (legacy, server_context, client_context) = (item("Legacy"), item("Server"), item("Client"));
+    // (a server's containers, by the rules a loopback server boots its place's scripts by: loopback/mod.rs eligible)
+    let game = engine.world().game;
+    let service = |name: &str| if server { crate::services::find_service(engine, game, name) } else { None };
+    let (workspace, server_scripts, server_storage) = (Some(engine.world().workspace), service("ServerScriptService"), service("ServerStorage"));
     let mut found = Vec::new();
     for &id in ids {
-        let (class, ready) = {
+        let ready = {
             let state = engine.state.borrow();
             let class = state.dom.class_of(id);
-            let ready = (class == script_class || class == local_class)
-                && !engine.modules.borrow().started(id)
-                && state.dom.boolean(id, enabled) != Some(false)
-                && (class == local_class || state.dom.raw_get(id, run_context).and_then(crate::Value::as_enum) == client)
-                && crate::services::in_data_model(&state, id);
-            (class, ready)
+            let under = |ancestor: Option<InstanceId>| ancestor.is_some_and(|ancestor| state.dom.is_descendant_of(id, ancestor));
+            let context = state.dom.raw_get(id, run_context).and_then(crate::Value::as_enum);
+            let runs_here = if server {
+                class == script_class
+                    && (((context.is_none() || context == legacy) && (under(workspace) || under(server_scripts)))
+                        || (context.is_some() && context == server_context && !under(server_storage)))
+            } else {
+                class == local_class || (class == script_class && context.is_some() && context == client_context)
+            };
+            runs_here && !engine.modules.borrow().started(id) && state.dom.boolean(id, enabled) != Some(false) && crate::services::in_data_model(&state, id)
         };
         if ready {
             if let Some(actor) = actor_of(engine, id) {
                 found.push((actor, id));
             }
         }
-        let _ = class;
     }
     found
 }
@@ -108,6 +115,17 @@ pub fn start_under(lua: &Lua, engine: &Rc<Engine>, root: InstanceId) -> LuaResul
 
 /// Starts every script under an Actor that has not started (a frame step's sweep for what no assignment reported).
 pub fn start_scripts(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
+    {
+        let mut modules = engine.modules.borrow_mut();
+        let parallel = &mut modules.parallel;
+        if !parallel.waking.is_empty() {
+            let finished: Vec<usize> = parallel.waking.iter().filter(|(_, thread)| thread.status() != LuaThreadStatus::Resumable).map(|(&key, _)| key).collect();
+            for key in finished {
+                parallel.waking.remove(&key);
+                parallel.modes.remove(&key);
+            }
+        }
+    }
     let Some(actor_class) = engine.class_id("Actor") else { return Ok(()) };
     let actors = engine.state.borrow_mut().dom.instances_of_class(actor_class);
     let mut ids = Vec::new();
@@ -127,6 +145,10 @@ pub struct Parallel {
     modes: FxHashMap<usize, bool>,
     /// The phases running (a parallel handler can fire a signal with parallel handlers): the innermost last
     phases: Vec<Phase>,
+    /// Parallel handlers' threads that yielded in their parallel part on something else (task.wait) and so resume
+    /// desynchronized, as in Studio (measured: GetService after a task.wait in a ConnectParallel handler raised); held until
+    /// they finish ([`start_scripts`] sweeps them) so their key is not another thread's
+    waking: FxHashMap<usize, LuaThread>,
 }
 
 #[derive(Default)]
@@ -141,6 +163,39 @@ fn key(thread: &LuaThread) -> usize {
     thread.to_pointer() as usize
 }
 
+/// Whether the thread whose state is `state` runs in the parallel part of a parallel phase (desynchronized): the raw API's
+/// methods, property writes and event reads refuse what is not thread safe there ([`parallel_refusal`]). Free while no
+/// phase runs.
+pub(crate) fn desynchronized(engine: &Engine, state: *mut mlua::ffi::lua_State) -> bool {
+    let Ok(modules) = engine.modules.try_borrow() else { return false };
+    let parallel = &modules.parallel;
+    (!parallel.phases.is_empty() || !parallel.waking.is_empty()) && parallel.modes.get(&(state as usize)) == Some(&true)
+}
+
+/// What a desynchronized thread may not do to a member, as Roblox refuses it (measured in Studio 0.748, a server Script
+/// under an Actor in a Heartbeat ConnectParallel handler): a method the dump gives no `CallParallel` (Destroy, Clone,
+/// SetAttribute, GetService, FireAllClients, WaitForChild, PivotTo; FindFirstChild, GetChildren, GetAttribute, Raycast, IsA
+/// and BindableEvent.Fire ran), any property write (an unparented part's Name too) and any event read (`part.Touched`).
+/// Reads, Instance.new, task.wait and task.spawn ran. The member's declaring class names it.
+pub(crate) enum ParallelUse {
+    Call,
+    Write,
+    Event,
+}
+
+pub(crate) fn parallel_refusal(engine: &Engine, class: crate::ClassId, name: crate::NameId, use_: ParallelUse) -> Option<String> {
+    let reflection = &engine.reflection;
+    let (kind, owner, verb) = match use_ {
+        ParallelUse::Call => {
+            let method = reflection.class_method(class, name).filter(|method| !method.callable_in_parallel())?;
+            ("Function", method.owner, "call")
+        }
+        ParallelUse::Write => ("Property", reflection.class_property(class, name)?.owner, "write"),
+        ParallelUse::Event => ("Event", reflection.class_event(class, name)?.owner, "access"),
+    };
+    Some(format!("{kind} {}.{} is not safe to {verb} in parallel", reflection.class(owner).name, reflection.name(name)))
+}
+
 /// task.synchronize (`to_serial`) or task.desynchronize of the running thread: true when it must yield now, because it is a
 /// parallel handler's thread of a running phase that is leaving its part for the other. Where the thread cannot yield it
 /// raises `thread is not yieldable` and stays in its part (by the rule measured for the engine's other yielding calls,
@@ -150,6 +205,13 @@ pub fn park(lua: &Lua, engine: &Engine, to_serial: bool) -> Result<bool, Flow> {
     let mut modules = engine.modules.borrow_mut();
     let parallel = &mut modules.parallel;
     let Some(&in_parallel) = parallel.modes.get(&key(&thread)) else { return Ok(false) };
+    // (a thread resumed desynchronized outside a phase: task.synchronize makes it serial where it stands)
+    if parallel.waking.contains_key(&key(&thread)) {
+        if to_serial && in_parallel {
+            parallel.modes.insert(key(&thread), false);
+        }
+        return Ok(false);
+    }
     let Some(phase) = parallel.phases.last_mut() else { return Ok(false) };
     if in_parallel != to_serial {
         return Ok(false);
@@ -193,9 +255,14 @@ pub fn parallel_phase(lua: &Lua, engine: &Rc<Engine>, threads: Vec<(LuaThread, L
         }
     }
     let mut modules = engine.modules.borrow_mut();
-    modules.parallel.phases.pop();
+    let parallel = &mut modules.parallel;
+    parallel.phases.pop();
     for (thread, _) in &threads {
-        modules.parallel.modes.remove(&key(thread));
+        if thread.status() == LuaThreadStatus::Resumable && parallel.modes.get(&key(thread)) == Some(&true) {
+            parallel.waking.insert(key(thread), thread.clone());
+        } else {
+            parallel.modes.remove(&key(thread));
+        }
     }
 }
 

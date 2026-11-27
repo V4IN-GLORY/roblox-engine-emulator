@@ -289,6 +289,26 @@ Every reflected engine method checks its arguments before its behaviour runs, wh
 - **Capabilities:** a method the dump permits no `Call` raises `The current thread cannot call 'X' (lacking capability Y)` before its arguments are looked at; every such method in the capture did, and no other. The dump does not name the capability, so each is listed in `reflection.rs` `CAPABILITY_CALLS`, and the check skips these methods.
 - **Not checked here:** methods ree records no parameters for (`MemberOrigin::Engine`), the Instance methods raw.rs runs inline with their own measured checks (`FindFirstChild`, `WaitForChild`, `SetAttribute`, ...), a behaviour registered as checking its own arguments in its own words, order or price (`Behaviors::checks_own_arguments`, `R.Method`'s fourth argument `true`: EditableMesh's methods, the Region3 queries, `LogService`'s, `SharedTableRegistry:SetSharedTable`, and EditableImage's `Draw*` and `AssetService:CreateEditableImage`, whose optional parameters the 0.747 dump marks required), and a method's own checks after the casts (`Actor:SendMessage may only be called on Actors attached to the DataModel.`), which are its behaviour's. Exceptions the rules miss: some methods take an invalid enum name without error (`Humanoid:ChangeState("x")`, `Controller:UnbindButton`), some take nil or a string for a first parameter of another type (`CollectionService:GetTags()`, `AudioEmitter:SetAngleAttenuation("x")`, `UserInputService:CreateVirtualInput()`).
 
+## Parallel Luau (`src/lua/actors.rs`)
+
+A Script or LocalScript under an Actor runs in the Actor's own VM. A client starts a LocalScript, or a Script whose RunContext
+is Client; a server starts a Script with RunContext Legacy under Workspace or ServerScriptService, or Server outside
+ServerStorage (the rules a loopback server boots a place's scripts by). A `ConnectParallel` handler runs desynchronized:
+a RunService frame event's after its serial handlers, a deferred event's (an Actor's `BindToMessageParallel` message) in a
+phase of its own. A desynchronized thread that yields on anything but `task.synchronize` (a `task.wait`) wakes still
+desynchronized. Such a thread is refused, in Roblox's words (measured in Studio 0.748: a server Script under an Actor, the
+calls in a Heartbeat `ConnectParallel` handler):
+
+| what | refused when | message |
+|---|---|---|
+| a method call | the dump gives it no `CallParallel` (Destroy, Clone, SetAttribute, GetService, FireAllClients, WaitForChild, PivotTo) | `Function Instance.Destroy is not safe to call in parallel` |
+| a property write | always (an unparented part's Name too) | `Property BasePart.Transparency is not safe to write in parallel` |
+| an event read | always (`part.Touched`) | `Event BasePart.Touched is not safe to access in parallel` |
+
+The class named is the member's declaring class. Property reads, `CallParallel` methods (FindFirstChild, GetChildren,
+GetAttribute, Raycast, IsA, BindableEvent.Fire), Instance.new, task.wait and task.spawn ran; after `task.synchronize()`
+everything does. A thread a desynchronized one spawns or resumes as a coroutine is not checked.
+
 ## Unemulated methods (`src/lua/fallback.rs`)
 
 A reflected method no behaviour implements (Rust, the engine's Luau or a validator file) still runs: after its argument checks (above) it answers a value of its reflected return type (`MethodInfo.returns`), so a script that uses the result runs on as it does in Roblox, and its first use writes an Output line of kind `stubbed` (`BasePart.GetRootPart is not emulated`), counted with the `missing` ones in the summary's `unemulated` list. The line names the class that declares the method, whichever subclass's instance called it (a `Part` and a `CornerWedgePart` both count under `BasePart`). The rules come from the type alone and were checked against what each method returned for valid arguments in a Roblox Studio 0.748.0.7481526 playtest (`validator/probe/expected`, the `cv` lines; `validator/probe/surface_diff.py` compares them):

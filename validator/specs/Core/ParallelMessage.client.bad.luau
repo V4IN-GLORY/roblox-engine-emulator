@@ -1,0 +1,6 @@
+local actor = script:GetActor()
+actor:BindToMessageParallel("Tick", function(amount)
+	local players = game:GetService("Players")
+	print(#players:GetPlayers(), amount)
+end)
+actor:SendMessage("Tick", 1)

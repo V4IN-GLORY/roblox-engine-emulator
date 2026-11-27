@@ -90,7 +90,7 @@ const CLIENT_READS: &str = include_str!("client_profile_tests/reads.luau");
 
 /// What the base commit (main 056dc98, before client profiles) printed for CLIENT_READS, but for GuiService.PreferredTransparency
 /// (1, not 0) and the policy table (all twelve keys, no external links), which follow a 0.747 client since (measured 2026-11-26)
-const DEFAULT_LINES: [&str; 29] = [
+const DEFAULT_LINES: [&str; 28] = [
     r#"print player Player Player 1 0 Enum.MembershipType.None false  0"#,
     r#"print inputs true true false false false false false"#,
     r#"print input Enum.PreferredInput.KeyboardAndMouse Enum.UserInputType.MouseMovement"#,

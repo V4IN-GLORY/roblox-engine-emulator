@@ -1338,6 +1338,13 @@ unsafe fn index_fast(state: *mut ffi::lua_State) -> Out {
             Some(name) => api.member(class, name),
             None => Member { read: Read::Child, write: Write::Slow, call: Call::NotMethod, index_fn: 0, call_fn: 0, call_checks: None, cost: 0.0, name: 0 },
         };
+        if matches!(read.read, Read::Event)
+            && let Some(name) = name
+            && super::actors::desynchronized(engine, state)
+            && let Some(message) = super::actors::parallel_refusal(engine, class, name, super::actors::ParallelUse::Event)
+        {
+            return Out::Raise(message, 0);
+        }
         // A key that names no member and no child reads the member it names with its first letter upper-cased
         // (`part.anchored`, instance.rs `get`): only after the child lookup has missed, so exact names never pay for it
         let mut child = None;
@@ -1496,6 +1503,11 @@ unsafe fn newindex_fast(state: *mut ffi::lua_State) -> Out {
         if placeholder {
             linstance::reveal_bundle(engine, id);
             class = engine.state.borrow().dom.at(id).class;
+        }
+        if super::actors::desynchronized(engine, state)
+            && let Some(message) = super::actors::parallel_refusal(engine, class, name, super::actors::ParallelUse::Write)
+        {
+            return Out::Raise(message, 0);
         }
         let member = api.member(class, name);
         let kind = ffi::lua_type(state, 3);
@@ -1797,6 +1809,12 @@ unsafe fn namecall_fast(state: *mut ffi::lua_State) -> Out {
             class = engine.state.borrow().dom.at(id).class;
         }
         let Some((name, member, lower_first)) = method_member(api, class, key, exact) else { return Out::NotMethod };
+        if !matches!(member.call, Call::NotMethod)
+            && super::actors::desynchronized(engine, state)
+            && let Some(message) = super::actors::parallel_refusal(engine, class, name, super::actors::ParallelUse::Call)
+        {
+            return Out::Raise(message, 0);
+        }
         crate::cost::tally_member("call", &engine.reflection.class(class).name, || engine.reflection.name(name).to_string());
         let serial = engine.state.borrow().dom.at(id).serial;
         let cost = {
